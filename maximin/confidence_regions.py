@@ -119,12 +119,12 @@ class Ellipsoid(ConfidenceRegion):
     @property
     def beta_hat(self) -> npt.NDArray[np.float64]:
         """Center of the ellipsoid."""
-        return self._beta_hat
+        return self._beta_hat.copy()
 
     @property
     def Sigma(self) -> npt.NDArray[np.float64]:
         """Shape matrix."""
-        return self._Sigma
+        return self._Sigma.copy()
 
     def _mahalanobis_sq(self, beta: npt.NDArray[np.float64]) -> float:
         r"""Return :math:`(\beta-\hat\beta)^\top \Sigma^{-1} (\beta-\hat\beta)`."""
