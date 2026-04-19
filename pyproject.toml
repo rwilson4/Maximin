@@ -99,7 +99,9 @@ ignore = [
     "E741",   # Ambiguous variable name (common in math: l, I, O)
     "N803",   # Argument name should be lowercase (allows single-letter math vars)
     "N806",   # Variable in function should be lowercase (allows math notation)
+    "N802",   # Function name should be lowercase (allows math property names: A, Sigma)
     "NPY002", # Allow numpy.random.Generator for newer code
+    "SIM103", # Return condition directly (style guide prefers explicit if/return)
     "SIM108", # Use ternary operator (sometimes clearer to use if-else)
 ]
 
