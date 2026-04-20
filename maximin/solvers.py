@@ -53,13 +53,13 @@ class SolverResult:
 
 
 class DualSolver(ABC):
-    r"""Abstract base for solvers that maximize :math:`h(c)` over :math:`c \in C`.
+    r"""Abstract base for solvers that maximize :math:`f(c)` over :math:`c \in C`.
 
     A DualSolver computes
 
     .. math::
 
-        c^* = \arg\max_{c \in C}\, h(c)
+        c^* = \arg\max_{c \in C}\, f(c)
             = \arg\max_{c \in C}\, \min_{\beta \in S} g(c;\, \beta).
     """
 
@@ -83,13 +83,13 @@ class DualSolver(ABC):
 
 
 class PrimalSolver(ABC):
-    r"""Abstract base for solvers that minimize :math:`f(\beta)` over :math:`\beta \in S`.
+    r"""Abstract base for solvers that minimize :math:`h(\beta)` over :math:`\beta \in S`.
 
     A PrimalSolver computes
 
     .. math::
 
-        \beta^* = \arg\min_{\beta \in S}\, f(\beta)
+        \beta^* = \arg\min_{\beta \in S}\, h(\beta)
                 = \arg\min_{\beta \in S}\, \max_{c \in C} g(c;\, \beta).
     """
 
@@ -120,12 +120,12 @@ class ProximalSubgradientDualSolver(DualSolver):
     .. math::
 
         c_{t+1} = \Pi_C\!\bigl(
-            c_t + \alpha_t\, \nabla_c h(c_t)
+            c_t + \alpha_t\, \nabla_c f(c_t)
         \bigr),
 
     with diminishing step sizes :math:`\alpha_t = \alpha_0 / \sqrt{t+1}`
     and Euclidean projection :math:`\Pi_C` onto the decision space.
-    The best iterate (highest :math:`h` value seen) is returned.
+    The best iterate (highest :math:`f` value seen) is returned.
 
     Parameters
     ----------
@@ -200,12 +200,12 @@ class ProximalSubgradientPrimalSolver(PrimalSolver):
     .. math::
 
         \beta_{t+1} = \Pi_S\!\bigl(
-            \beta_t - \alpha_t\, \nabla_\beta f(\beta_t)
+            \beta_t - \alpha_t\, \nabla_\beta h(\beta_t)
         \bigr),
 
     with diminishing step sizes :math:`\alpha_t = \alpha_0 / \sqrt{t+1}`
     and Euclidean projection :math:`\Pi_S` onto the confidence region.
-    The best iterate (lowest :math:`f` value seen) is returned.
+    The best iterate (lowest :math:`h` value seen) is returned.
 
     Parameters
     ----------
@@ -279,7 +279,7 @@ class MarkowitzSolver(DualSolver):
 
     .. math::
 
-        h(c) = c^\top A \hat\beta - \bigl\| \Sigma^{1/2} A^\top c \bigr\|_2
+        f(c) = c^\top A \hat\beta - \bigl\| \Sigma^{1/2} A^\top c \bigr\|_2
 
     over the :class:`~maximin.decision_spaces.AllocationDecision` space
     :math:`C = \{c \ge 0,\, \sum_i c_i \le 1\}` by solving the
@@ -431,7 +431,7 @@ class MarkowitzSolver(DualSolver):
         Returns
         -------
         SolverResult
-            Optimal decision ``c*``, objective value ``h(c*)``,
+            Optimal decision ``c*``, objective value ``f(c*)``,
             interior-point iteration count, and convergence flag.
         """
         m = self._game.dim_c

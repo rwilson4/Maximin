@@ -10,7 +10,7 @@ from maximin.problem_objectives import MatrixGameEllipsoidDualObjective
 
 
 class TestMatrixGameEllipsoidDualObjective:
-    """Tests for the analytic dual objective h(c) = c^T A b_hat - ||Sigma^{1/2} A^T c||."""
+    """Tests for the analytic dual objective f(c) = c^T A b_hat - ||Sigma^{1/2} A^T c||."""
 
     @staticmethod
     def _make_problem(
@@ -28,16 +28,16 @@ class TestMatrixGameEllipsoidDualObjective:
 
     @staticmethod
     def test_evaluate_matches_formula() -> None:
-        """h(c) = c^T A b_hat - ||Sigma^{1/2} A^T c|| computed directly."""
+        """f(c) = c^T A b_hat - ||Sigma^{1/2} A^T c|| computed directly."""
         _, _, obj = TestMatrixGameEllipsoidDualObjective._make_problem()
         # A = I, beta_hat = [1, 0], Sigma = 0.01 I
-        # h([1, 0]) = 1 - sqrt(0.01) = 1 - 0.1 = 0.9
+        # f([1, 0]) = 1 - sqrt(0.01) = 1 - 0.1 = 0.9
         c = np.array([1.0, 0.0])
         assert pytest.approx(obj.evaluate(c), abs=1e-12) == 0.9
 
     @staticmethod
     def test_evaluate_zero_action() -> None:
-        """h(0) = 0 since both terms vanish."""
+        """f(0) = 0 since both terms vanish."""
         _, _, obj = TestMatrixGameEllipsoidDualObjective._make_problem()
         assert pytest.approx(obj.evaluate(np.zeros(2)), abs=1e-12) == 0.0
 
@@ -54,7 +54,7 @@ class TestMatrixGameEllipsoidDualObjective:
 
     @staticmethod
     def test_minimizer_achieves_dual_value() -> None:
-        """g(c, beta*(c)) == h(c): the minimizer achieves the dual objective."""
+        """g(c, beta*(c)) == f(c): the minimizer achieves the dual objective."""
         game, _, obj = TestMatrixGameEllipsoidDualObjective._make_problem()
         c = np.array([0.7, 0.3])
         beta_star = obj.minimizer(c)
@@ -75,7 +75,7 @@ class TestMatrixGameEllipsoidDualObjective:
 
     @staticmethod
     def test_grad_c_equals_A_beta_star() -> None:
-        """By the envelope theorem, grad_c h = A @ beta*(c)."""
+        """By the envelope theorem, grad_c f = A @ beta*(c)."""
         game, _, obj = TestMatrixGameEllipsoidDualObjective._make_problem()
         c = np.array([0.6, 0.4])
         expected = game.A @ obj.minimizer(c)
@@ -115,7 +115,7 @@ class TestMatrixGameEllipsoidDualObjective:
     ],
 )
 def test_dual_objective_grad_finite_difference(seed: int, m: int, n: int) -> None:
-    """Finite-difference check of grad_c h against the analytic gradient."""
+    """Finite-difference check of grad_c f against the analytic gradient."""
     np.random.seed(seed)
     A = np.random.randn(m, n)
     beta_hat = np.random.randn(n)
