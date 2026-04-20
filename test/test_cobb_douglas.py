@@ -125,7 +125,9 @@ class TestCobbDouglasEllipsoidDualObjective:
         model, _, obj = TestCobbDouglasEllipsoidDualObjective._setup()
         c = np.array([0.5, 0.5])
         beta_hat = np.array([0.0, 0.3, 0.3])
-        assert model.evaluate(c, obj.minimizer(c)) <= model.evaluate(c, beta_hat) + 1e-12
+        assert (
+            model.evaluate(c, obj.minimizer(c)) <= model.evaluate(c, beta_hat) + 1e-12
+        )
 
     @staticmethod
     def test_evaluate_equals_g_at_minimizer() -> None:
