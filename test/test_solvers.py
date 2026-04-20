@@ -6,11 +6,10 @@ import time
 import numpy as np
 import pytest
 
-from maximin.confidence_regions import Ellipsoid
+from maximin.confidence_regions import Ellipsoid, Hypercube
 from maximin.decision_spaces import AllocationDecision
 from maximin.outcome_models import MatrixGame
 from maximin.problem_objectives import MatrixGameEllipsoidDualObjective
-from maximin.confidence_regions import Hypercube
 from maximin.solvers import (
     MarkowitzSolver,
     MaximinLinearSolver,
