@@ -12,6 +12,7 @@ from maximin.problem_objectives import (
 from maximin.solvers import (
     DualSolver,
     MarkowitzSolver,
+    MaximinLinearSolver,
     PrimalSolver,
     ProximalSubgradientDualSolver,
     ProximalSubgradientPrimalSolver,
@@ -29,6 +30,7 @@ __all__ = [
     "MarkowitzSolver",
     "MatrixGame",
     "MatrixGameEllipsoidDualObjective",
+    "MaximinLinearSolver",
     "OutcomeModel",
     "PrimalObjective",
     "PrimalSolver",
