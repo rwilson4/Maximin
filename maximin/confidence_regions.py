@@ -49,6 +49,81 @@ class ConfidenceRegion(ABC):
         r"""Return True if ``beta`` lies in :math:`S`."""
 
 
+class Hypercube(ConfidenceRegion):
+    r"""Hypercube (box) confidence region.
+
+    .. math::
+
+        S = \bigl\{ \beta \in \mathbb{R}^n :
+            \ell_i \le \beta_i \le u_i,\ i = 1,\dots,n \bigr\}
+
+    Parameters
+    ----------
+    lo : npt.NDArray[np.float64]
+        Lower bounds, shape ``(n,)``.
+    hi : npt.NDArray[np.float64]
+        Upper bounds, shape ``(n,)``.  Must satisfy ``lo[i] <= hi[i]``
+        for all ``i``.
+    """
+
+    def __init__(
+        self,
+        lo: npt.NDArray[np.float64],
+        hi: npt.NDArray[np.float64],
+    ) -> None:
+        if lo.ndim != 1:
+            raise ValueError(f"lo must be 1-dimensional, got shape {lo.shape}")
+        if hi.shape != lo.shape:
+            raise ValueError(
+                f"hi must have the same shape as lo ({lo.shape}), got {hi.shape}"
+            )
+        if np.any(lo > hi):
+            raise ValueError("lo must be <= hi for every component")
+        self._lo = lo.copy()
+        self._hi = hi.copy()
+
+    @property
+    def dim(self) -> int:
+        """Dimension of the parameter space."""
+        return len(self._lo)
+
+    @property
+    def lo(self) -> npt.NDArray[np.float64]:
+        """Lower bounds."""
+        return self._lo.copy()
+
+    @property
+    def hi(self) -> npt.NDArray[np.float64]:
+        """Upper bounds."""
+        return self._hi.copy()
+
+    def contains(
+        self,
+        beta: npt.NDArray[np.float64],
+        atol: float = 1e-9,
+    ) -> bool:
+        r"""Return True if ``beta`` lies in :math:`S`."""
+        return bool(np.all(beta >= self._lo - atol) and np.all(beta <= self._hi + atol))
+
+    def project(
+        self,
+        beta: npt.NDArray[np.float64],
+    ) -> npt.NDArray[np.float64]:
+        r"""Project ``beta`` onto :math:`S` by component-wise clamping.
+
+        Parameters
+        ----------
+        beta : npt.NDArray[np.float64]
+            Point to project, shape ``(n,)``.
+
+        Returns
+        -------
+        npt.NDArray[np.float64]
+            Projected point, shape ``(n,)``.
+        """
+        return np.clip(beta, self._lo, self._hi)
+
+
 class Ellipsoid(ConfidenceRegion):
     r"""Ellipsoidal confidence region.
 

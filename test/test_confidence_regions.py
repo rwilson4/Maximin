@@ -4,7 +4,7 @@
 import numpy as np
 import pytest
 
-from maximin.confidence_regions import Ellipsoid
+from maximin.confidence_regions import Ellipsoid, Hypercube
 
 
 class TestEllipsoid:
@@ -172,3 +172,121 @@ def test_ellipsoid_project_outside_lands_on_boundary(seed: int, n: int) -> None:
         delta = proj - beta_hat
         mahal = float(delta @ Sigma_inv @ delta)
         assert pytest.approx(mahal, abs=1e-8) == 1.0
+
+
+class TestHypercube:
+    """Tests for the Hypercube confidence region."""
+
+    @staticmethod
+    def test_center_is_inside() -> None:
+        """The midpoint of the hypercube must be contained."""
+        lo = np.array([-1.0, 0.0, 2.0])
+        hi = np.array([1.0, 3.0, 5.0])
+        region = Hypercube(lo, hi)
+        mid = (lo + hi) / 2.0
+        assert region.contains(mid)
+
+    @staticmethod
+    def test_project_inside_unchanged() -> None:
+        """A point already inside S is returned unchanged."""
+        lo = np.array([0.0, 0.0])
+        hi = np.array([1.0, 1.0])
+        region = Hypercube(lo, hi)
+        beta = np.array([0.3, 0.7])
+        np.testing.assert_allclose(region.project(beta), beta)
+
+    @staticmethod
+    def test_project_outside_clamps() -> None:
+        """A point outside is clamped component-wise to the bounds."""
+        lo = np.array([-1.0, -1.0])
+        hi = np.array([1.0, 1.0])
+        region = Hypercube(lo, hi)
+        beta = np.array([3.0, -5.0])
+        np.testing.assert_allclose(region.project(beta), [1.0, -1.0])
+
+    @staticmethod
+    def test_project_mixed_components() -> None:
+        """Components inside bounds are unchanged; those outside are clamped."""
+        lo = np.array([0.0, 2.0, -3.0])
+        hi = np.array([1.0, 5.0, 3.0])
+        region = Hypercube(lo, hi)
+        beta = np.array([-1.0, 3.5, 7.0])
+        np.testing.assert_allclose(region.project(beta), [0.0, 3.5, 3.0])
+
+    @staticmethod
+    def test_contains_boundary() -> None:
+        """Points exactly on the boundary should be contained."""
+        lo = np.array([0.0, 0.0])
+        hi = np.array([1.0, 1.0])
+        region = Hypercube(lo, hi)
+        assert region.contains(np.array([0.0, 1.0]))
+        assert region.contains(np.array([1.0, 0.0]))
+
+    @staticmethod
+    def test_contains_outside() -> None:
+        """A point outside should not be contained."""
+        lo = np.array([0.0, 0.0])
+        hi = np.array([1.0, 1.0])
+        region = Hypercube(lo, hi)
+        assert not region.contains(np.array([1.1, 0.5]))
+
+    @staticmethod
+    def test_dim() -> None:
+        """dim property returns the number of components."""
+        lo = np.zeros(5)
+        hi = np.ones(5)
+        assert Hypercube(lo, hi).dim == 5
+
+    @staticmethod
+    def test_properties_return_copies() -> None:
+        """Mutating returned arrays must not affect the stored region."""
+        lo = np.array([0.0, 0.0])
+        hi = np.array([1.0, 1.0])
+        region = Hypercube(lo, hi)
+        region.lo[0] = 999.0
+        assert region.lo[0] == 0.0
+        region.hi[1] = 999.0
+        assert region.hi[1] == 1.0
+
+    @staticmethod
+    def test_invalid_lo_gt_hi() -> None:
+        """lo > hi for any component should raise ValueError."""
+        with pytest.raises(ValueError, match="lo must be <= hi"):
+            Hypercube(np.array([1.0, 0.0]), np.array([0.0, 1.0]))
+
+    @staticmethod
+    def test_invalid_shape_mismatch() -> None:
+        """lo and hi with different shapes should raise ValueError."""
+        with pytest.raises(ValueError, match="shape"):
+            Hypercube(np.zeros(3), np.ones(2))
+
+    @staticmethod
+    def test_invalid_not_1d() -> None:
+        """2-D lo should raise ValueError."""
+        with pytest.raises(ValueError, match="1-dimensional"):
+            Hypercube(np.zeros((2, 2)), np.ones((2, 2)))
+
+
+@pytest.mark.parametrize("seed,n", [(10, 2), (20, 5), (30, 10)])
+def test_hypercube_project_always_feasible(seed: int, n: int) -> None:
+    """Projection of any point lies in S."""
+    np.random.seed(seed)
+    lo = np.random.randn(n)
+    hi = lo + np.abs(np.random.randn(n)) + 0.1
+    region = Hypercube(lo, hi)
+    for _ in range(30):
+        beta = np.random.randn(n) * 5.0
+        assert region.contains(region.project(beta))
+
+
+@pytest.mark.parametrize("seed,n", [(11, 2), (21, 4)])
+def test_hypercube_project_idempotent(seed: int, n: int) -> None:
+    """Projecting a second time leaves the point unchanged."""
+    np.random.seed(seed)
+    lo = np.random.randn(n)
+    hi = lo + np.abs(np.random.randn(n)) + 0.1
+    region = Hypercube(lo, hi)
+    for _ in range(20):
+        beta = np.random.randn(n) * 5.0
+        proj = region.project(beta)
+        np.testing.assert_allclose(region.project(proj), proj, atol=1e-15)
