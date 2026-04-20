@@ -7,8 +7,8 @@ from abc import ABC, abstractmethod
 import numpy as np
 import numpy.typing as npt
 
-from maximin.confidence_regions import Ellipsoid
-from maximin.outcome_models import CobbDouglas, MatrixGame
+from maximin.confidence_regions import ConfidenceRegion, Ellipsoid
+from maximin.outcome_models import CobbDouglas, MatrixGame, OutcomeModel
 
 
 class DualObjective(ABC):
@@ -310,3 +310,110 @@ class CobbDouglasEllipsoidDualObjective(DualObjective):
         gamma = self._model.gamma
         base = self._model.delta + gamma * c
         return self.evaluate(c) * gamma * beta_star[1:] / base
+
+
+class DefaultDualObjective(DualObjective):
+    r"""General dual objective via inner APG on :math:`\beta`.
+
+    For any :class:`~maximin.outcome_models.OutcomeModel` and
+    :class:`~maximin.confidence_regions.ConfidenceRegion`, approximates
+
+    .. math::
+
+        f(c) = \min_{\beta \in S} g(c;\, \beta)
+
+    by running FISTA (Beck & Teboulle, 2009) projected gradient descent
+    on :math:`\beta \mapsto g(c;\, \beta)` over :math:`S`.  The outer
+    gradient is recovered by the envelope theorem:
+    :math:`\nabla_c f(c) = \nabla_c g(c;\, \beta^*(c))`.
+
+    When a closed-form dual is available (e.g.
+    :class:`MatrixGameEllipsoidDualObjective`), prefer it for speed and
+    precision.  This class is useful when no analytic formula exists.
+
+    Parameters
+    ----------
+    model : OutcomeModel
+        Outcome function providing ``evaluate``, ``grad_c``, and
+        ``grad_beta``.
+    region : ConfidenceRegion
+        Uncertainty set :math:`S` for ``beta`` with a ``project`` method.
+    max_iter : int
+        Maximum FISTA iterations for each inner minimization call.
+    tol : float
+        Inner convergence tolerance on the iterate-change norm.
+    step_size : float
+        FISTA step size ``alpha``.  Must satisfy ``alpha <= 1/L`` where
+        ``L`` is the Lipschitz constant of
+        :math:`\nabla_\beta g(c;\, \cdot)`.  For
+        :class:`~maximin.outcome_models.MatrixGame` the gradient is
+        constant in ``beta`` (Lipschitz constant zero), so any positive
+        value works.
+    """
+
+    def __init__(
+        self,
+        model: OutcomeModel,
+        region: ConfidenceRegion,
+        max_iter: int = 500,
+        tol: float = 1e-8,
+        step_size: float = 1e-2,
+    ) -> None:
+        if model.dim_beta != region.dim:
+            raise ValueError(
+                f"model.dim_beta ({model.dim_beta}) must equal "
+                f"region.dim ({region.dim})"
+            )
+        self._model = model
+        self._region = region
+        self._max_iter = max_iter
+        self._tol = tol
+        self._step_size = step_size
+
+    def minimizer(self, c: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+        r"""Find :math:`\beta^*(c)` via FISTA descent on :math:`g(c;\,\cdot)` over :math:`S`.
+
+        The FISTA iterates are
+
+        .. math::
+
+            \beta_{k+1} &= \Pi_S\!\bigl(y_k - \alpha\,\nabla_\beta g(c;\,y_k)\bigr), \\
+            t_{k+1}     &= \tfrac{1 + \sqrt{1 + 4t_k^2}}{2}, \\
+            y_{k+1}     &= \beta_{k+1}
+                           + \tfrac{t_k-1}{t_{k+1}}(\beta_{k+1} - \beta_k).
+
+        The best iterate (lowest :math:`g` value seen) is returned.
+        """
+        alpha = self._step_size
+        beta = self._region.project(np.zeros(self._region.dim))
+        y = beta.copy()
+        t = 1.0
+        best_beta = beta.copy()
+        best_obj = self._model.evaluate(c, beta)
+
+        for _ in range(self._max_iter):
+            grad = self._model.grad_beta(c, y)
+            beta_new = self._region.project(y - alpha * grad)
+
+            obj = self._model.evaluate(c, beta_new)
+            if obj < best_obj:
+                best_obj = obj
+                best_beta = beta_new.copy()
+
+            if float(np.linalg.norm(beta_new - beta)) < self._tol:
+                break
+
+            t_new = 0.5 * (1.0 + math.sqrt(1.0 + 4.0 * t * t))
+            y = beta_new + ((t - 1.0) / t_new) * (beta_new - beta)
+            beta = beta_new
+            t = t_new
+
+        return best_beta
+
+    def evaluate(self, c: npt.NDArray[np.float64]) -> float:
+        r"""Return :math:`g(c;\, \beta^*(c))`."""
+        return float(self._model.evaluate(c, self.minimizer(c)))
+
+    def grad_c(self, c: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+        r"""Return :math:`\nabla_c g(c;\, \beta^*(c))` by the envelope theorem."""
+        return self._model.grad_c(c, self.minimizer(c))

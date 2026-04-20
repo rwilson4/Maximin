@@ -6,6 +6,7 @@ from maximin.decision_spaces import AllocationDecision, DecisionSpace
 from maximin.outcome_models import CobbDouglas, MatrixGame, OutcomeModel
 from maximin.problem_objectives import (
     CobbDouglasEllipsoidDualObjective,
+    DefaultDualObjective,
     DualObjective,
     MatrixGameEllipsoidDualObjective,
     PrimalObjective,
@@ -28,6 +29,7 @@ __all__ = [
     "CobbDouglasEllipsoidDualObjective",
     "ConfidenceRegion",
     "DecisionSpace",
+    "DefaultDualObjective",
     "DualObjective",
     "DualSolver",
     "Ellipsoid",
