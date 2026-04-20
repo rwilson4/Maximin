@@ -273,6 +273,104 @@ class ProximalSubgradientPrimalSolver(PrimalSolver):
         )
 
 
+class AcceleratedProximalGradientDualSolver(DualSolver):
+    r"""Nesterov-accelerated projected gradient ascent on the dual objective.
+
+    Assumes :math:`f(c) = \min_{\beta \in S} g(c;\beta)` is differentiable,
+    which holds whenever the infimum over :math:`\beta` is uniquely attained
+    for every :math:`c` (e.g. any MatrixGame paired with an Ellipsoid). In
+    that case the envelope theorem (Danskin's theorem) gives
+    :math:`\nabla_c f(c) = \nabla_c g(c;\beta^*(c))`, which the objective's
+    ``grad_c`` method should return.
+
+    Iterates the FISTA rule (Beck & Teboulle, 2009):
+
+    .. math::
+
+        c_{k+1} &= \Pi_C\!\bigl(y_k + \alpha\,\nabla f(y_k)\bigr), \\
+        t_{k+1} &= \tfrac{1 + \sqrt{1 + 4t_k^2}}{2}, \\
+        y_{k+1} &= c_{k+1} + \tfrac{t_k - 1}{t_{k+1}}\,
+                   (c_{k+1} - c_k),
+
+    with constant step size :math:`\alpha \le 1/L` where :math:`L` is the
+    Lipschitz constant of :math:`\nabla f`. Convergence is
+    :math:`O(1/k^2)`, faster than the :math:`O(1/\sqrt{k})` rate of
+    projected subgradient. The best iterate (highest :math:`f` value seen)
+    is returned to guard against non-monotone steps caused by momentum.
+
+    Parameters
+    ----------
+    objective : DualObjective
+        Dual objective to maximize. Its ``grad_c`` must return the true
+        gradient (not a subgradient).
+    space : DecisionSpace
+        Feasible set for ``c``.
+    max_iter : int
+        Maximum number of gradient steps.
+    tol : float
+        Convergence tolerance on the iterate-change norm.
+    step_size : float
+        Constant step size :math:`\alpha`. Must satisfy
+        :math:`\alpha \le 1/L`; too large a value causes divergence.
+    """
+
+    def __init__(
+        self,
+        objective: DualObjective,
+        space: DecisionSpace,
+        max_iter: int = 1_000,
+        tol: float = 1e-6,
+        step_size: float = 1e-2,
+    ) -> None:
+        self._objective = objective
+        self._space = space
+        self._max_iter = max_iter
+        self._tol = tol
+        self._step_size = step_size
+
+    def solve(
+        self,
+        c0: npt.NDArray[np.float64],
+    ) -> SolverResult:
+        """Run accelerated projected gradient ascent from ``c0``."""
+        alpha = self._step_size
+        c = self._space.project(c0.copy())
+        y = c.copy()
+        t = 1.0
+
+        best_c = c.copy()
+        best_obj = self._objective.evaluate(c)
+
+        for k in range(self._max_iter):
+            grad = self._objective.grad_c(y)
+            c_new = self._space.project(y + alpha * grad)
+
+            obj = self._objective.evaluate(c_new)
+            if obj > best_obj:
+                best_obj = obj
+                best_c = c_new.copy()
+
+            if float(np.linalg.norm(c_new - c)) < self._tol:
+                return SolverResult(
+                    x=best_c,
+                    objective=best_obj,
+                    n_iterations=k + 1,
+                    converged=True,
+                )
+
+            t_new = 0.5 * (1.0 + math.sqrt(1.0 + 4.0 * t * t))
+            y = c_new + ((t - 1.0) / t_new) * (c_new - c)
+            c = c_new
+            t = t_new
+
+        return SolverResult(
+            x=best_c,
+            objective=best_obj,
+            n_iterations=self._max_iter,
+            converged=False,
+        )
+
+
 class MarkowitzSolver(DualSolver):
     r"""Exact SOCP solver for the MatrixGame--Ellipsoid maximin problem.
 

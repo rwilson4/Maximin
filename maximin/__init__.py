@@ -10,6 +10,7 @@ from maximin.problem_objectives import (
     PrimalObjective,
 )
 from maximin.solvers import (
+    AcceleratedProximalGradientDualSolver,
     DualSolver,
     MarkowitzSolver,
     MaximinLinearSolver,
@@ -20,6 +21,7 @@ from maximin.solvers import (
 )
 
 __all__ = [
+    "AcceleratedProximalGradientDualSolver",
     "AllocationDecision",
     "ConfidenceRegion",
     "DecisionSpace",
