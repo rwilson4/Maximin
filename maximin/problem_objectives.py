@@ -277,7 +277,7 @@ class CobbDouglasEllipsoidDualObjective(DualObjective):
     def _v(self, c: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
         v = np.empty(self._model.dim_beta)
         v[0] = 1.0
-        v[1:] = np.log1p(c)
+        v[1:] = np.log(self._model.delta + self._model.gamma * c)
         return v
 
     def _quantities(
@@ -305,6 +305,8 @@ class CobbDouglasEllipsoidDualObjective(DualObjective):
         return float(math.exp(a - norm))
 
     def grad_c(self, c: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
-        r"""Return :math:`f(c)\,\beta^*(c)_{1:m}\,/\,(1+c)` by the envelope theorem."""
+        r"""Return :math:`f(c)\,\gamma\,\beta^*(c)_{1:m}\,/\,(\delta+\gamma c)` by the envelope theorem."""
         beta_star = self.minimizer(c)
-        return self.evaluate(c) * beta_star[1:] / (1.0 + c)
+        gamma = self._model.gamma
+        base = self._model.delta + gamma * c
+        return self.evaluate(c) * gamma * beta_star[1:] / base

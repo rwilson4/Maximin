@@ -29,6 +29,53 @@ class TestCobbDouglas:
             CobbDouglas(0)
 
     @staticmethod
+    def test_invalid_delta_shape() -> None:
+        with pytest.raises(ValueError, match="delta"):
+            CobbDouglas(2, delta=np.ones(3))
+
+    @staticmethod
+    def test_invalid_gamma_shape() -> None:
+        with pytest.raises(ValueError, match="gamma"):
+            CobbDouglas(2, gamma=np.ones(3))
+
+    @staticmethod
+    def test_evaluate_custom_delta_gamma() -> None:
+        r"""g(c; beta) = exp(0) * (2 + 3*0.5)^0.4 = 3.5^0.4 with delta=2, gamma=3."""
+        model = CobbDouglas(1, delta=np.array([2.0]), gamma=np.array([3.0]))
+        c = np.array([0.5])
+        beta = np.array([0.0, 0.4])
+        assert pytest.approx(model.evaluate(c, beta), rel=1e-12) == 3.5**0.4
+
+    @staticmethod
+    def test_evaluate_delta_zero() -> None:
+        r"""With delta=0 the model reduces to (gamma * c)^beta."""
+        model = CobbDouglas(1, delta=np.array([0.0]), gamma=np.array([2.0]))
+        c = np.array([3.0])
+        beta = np.array([0.0, 0.5])
+        assert pytest.approx(model.evaluate(c, beta), rel=1e-12) == 6.0**0.5
+
+    @staticmethod
+    @pytest.mark.parametrize("seed,m", [(7, 1), (13, 2), (42, 4)])
+    def test_grad_c_finite_difference_custom(seed: int, m: int) -> None:
+        """grad_c finite-difference check with non-default delta and gamma."""
+        np.random.seed(seed)
+        delta = np.random.rand(m) + 0.5
+        gamma = np.random.rand(m) + 0.5
+        model = CobbDouglas(m, delta=delta, gamma=gamma)
+        c = np.random.rand(m) * 0.8
+        beta = np.array([0.0, *np.random.rand(m) * 0.2 + 0.05])
+        eps = 1e-7
+        grad_fd = np.zeros(m)
+        for i in range(m):
+            cp, cm = c.copy(), c.copy()
+            cp[i] += eps
+            cm[i] -= eps
+            grad_fd[i] = (model.evaluate(cp, beta) - model.evaluate(cm, beta)) / (
+                2 * eps
+            )
+        np.testing.assert_allclose(grad_fd, model.grad_c(c, beta), rtol=1e-5)
+
+    @staticmethod
     def test_evaluate_known_value() -> None:
         r"""g([0.5, 0.5]; [0, 0.3, 0.3]) = 1.5^{0.6}."""
         model = CobbDouglas(2)
@@ -62,7 +109,7 @@ class TestCobbDouglas:
         np.random.seed(seed)
         model = CobbDouglas(m)
         c = np.random.rand(m) * 0.8
-        beta = np.array([0.0] + list(np.random.rand(m) * 0.2 + 0.05))
+        beta = np.array([0.0, *np.random.rand(m) * 0.2 + 0.05])
         eps = 1e-7
         grad_fd = np.zeros(m)
         for i in range(m):
@@ -81,7 +128,7 @@ class TestCobbDouglas:
         np.random.seed(seed)
         model = CobbDouglas(m)
         c = np.random.rand(m) * 0.8
-        beta = np.array([0.0] + list(np.random.rand(m) * 0.2 + 0.05))
+        beta = np.array([0.0, *np.random.rand(m) * 0.2 + 0.05])
         n = m + 1
         eps = 1e-7
         grad_fd = np.zeros(n)
@@ -155,7 +202,7 @@ class TestCobbDouglasEllipsoidDualObjective:
         np.random.seed(seed)
         m = 3
         model = CobbDouglas(m)
-        beta_hat = np.array([0.0] + list(np.random.rand(m) * 0.15 + 0.1))
+        beta_hat = np.array([0.0, *np.random.rand(m) * 0.15 + 0.1])
         region = Ellipsoid(beta_hat, 0.0001 * np.eye(m + 1))
         obj = CobbDouglasEllipsoidDualObjective(model, region)
         c = np.random.rand(m) * 0.5

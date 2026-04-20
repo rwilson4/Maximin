@@ -89,20 +89,29 @@ class OutcomeModel(ABC):
 
 
 class CobbDouglas(OutcomeModel):
-    r"""Cobb--Douglas outcome model.
+    r"""Cobb--Douglas outcome model with affine-transformed inputs.
 
     .. math::
 
         g(c;\,\beta)
-            = e^{\beta_0}\,\prod_{i=1}^{m}(1 + c_i)^{\beta_i}
+            = e^{\beta_0}\,\prod_{i=1}^{m}
+              (\delta_i + \gamma_i\,c_i)^{\beta_i}
 
     ``c`` represents resource allocations across ``m`` goods.  ``beta[0]``
     is the log baseline output and ``beta[1:]`` are the output elasticities.
+    ``delta`` and ``gamma`` are fixed known quantities that shift and scale
+    each input; they default to ``delta = gamma = 1``, giving the standard
+    form :math:`(1 + c_i)^{\beta_i}`.  Setting ``delta = 0`` gives a pure
+    power-law model :math:`(\gamma_i c_i)^{\beta_i}`.
 
     Parameters
     ----------
     m : int
         Number of goods; dimension of ``c``.  Must be >= 1.
+    delta : npt.NDArray[np.float64], optional
+        Intercept vector, shape ``(m,)``.  Defaults to ``ones(m)``.
+    gamma : npt.NDArray[np.float64], optional
+        Slope vector, shape ``(m,)``.  Defaults to ``ones(m)``.
 
     Notes
     -----
@@ -113,19 +122,31 @@ class CobbDouglas(OutcomeModel):
     .. math::
 
         \frac{\partial g}{\partial c_i}
-            = \frac{\beta_i}{1 + c_i}\,g, \qquad
+            = \frac{\gamma_i\,\beta_i}{\delta_i + \gamma_i c_i}\,g,
+        \qquad
         \nabla_\beta g
-            = g\,\bigl[1,\,\log(1+c_1),\,\dots,\,\log(1+c_m)\bigr]^\top.
+            = g\,\bigl[1,\,\log(\delta_1+\gamma_1 c_1),\,\dots\bigr]^\top.
 
     The model is concave in ``c`` when every ``beta[i] >= 0`` (for
     ``i >= 1``) and ``sum(beta[1:]) < 1``, and log-linear (hence convex)
-    in ``beta`` for every fixed ``c >= 0``.
+    in ``beta`` for every fixed ``c`` with ``delta + gamma * c > 0``.
     """
 
-    def __init__(self, m: int) -> None:
+    def __init__(
+        self,
+        m: int,
+        delta: npt.NDArray[np.float64] | None = None,
+        gamma: npt.NDArray[np.float64] | None = None,
+    ) -> None:
         if m < 1:
             raise ValueError(f"m must be >= 1, got {m}")
         self._m = m
+        self._delta = np.ones(m) if delta is None else np.array(delta, dtype=np.float64)
+        self._gamma = np.ones(m) if gamma is None else np.array(gamma, dtype=np.float64)
+        if self._delta.shape != (m,):
+            raise ValueError(f"delta must have shape ({m},), got {self._delta.shape}")
+        if self._gamma.shape != (m,):
+            raise ValueError(f"gamma must have shape ({m},), got {self._gamma.shape}")
 
     @property
     def dim_c(self) -> int:
@@ -137,13 +158,27 @@ class CobbDouglas(OutcomeModel):
         """Dimension of the parameter vector beta."""
         return self._m + 1
 
+    @property
+    def delta(self) -> npt.NDArray[np.float64]:
+        """Intercept vector, shape ``(m,)``."""
+        return self._delta.copy()
+
+    @property
+    def gamma(self) -> npt.NDArray[np.float64]:
+        """Slope vector, shape ``(m,)``."""
+        return self._gamma.copy()
+
+    def _base(self, c: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+        """Return delta + gamma * c, the argument of each power."""
+        return self._delta + self._gamma * c
+
     def evaluate(
         self,
         c: npt.NDArray[np.float64],
         beta: npt.NDArray[np.float64],
     ) -> float:
-        r"""Evaluate :math:`e^{\beta_0}\prod_i(1+c_i)^{\beta_i}`."""
-        log_g = beta[0] + float(np.dot(beta[1:], np.log1p(c)))
+        r"""Evaluate :math:`e^{\beta_0}\prod_i(\delta_i+\gamma_i c_i)^{\beta_i}`."""
+        log_g = beta[0] + float(np.dot(beta[1:], np.log(self._base(c))))
         return float(np.exp(log_g))
 
     def grad_c(
@@ -151,19 +186,19 @@ class CobbDouglas(OutcomeModel):
         c: npt.NDArray[np.float64],
         beta: npt.NDArray[np.float64],
     ) -> npt.NDArray[np.float64]:
-        r"""Return :math:`g \cdot \beta_{1:m} / (1 + c)`."""
-        return self.evaluate(c, beta) * beta[1:] / (1.0 + c)
+        r"""Return :math:`g \cdot \gamma\,\beta_{1:m}\,/\,(\delta + \gamma c)`."""
+        return self.evaluate(c, beta) * self._gamma * beta[1:] / self._base(c)
 
     def grad_beta(
         self,
         c: npt.NDArray[np.float64],
         beta: npt.NDArray[np.float64],
     ) -> npt.NDArray[np.float64]:
-        r"""Return :math:`g \cdot [1, \log(1+c_1), \dots, \log(1+c_m)]^\top`."""
+        r"""Return :math:`g \cdot [1,\,\log(\delta_i+\gamma_i c_i),\,\dots]^\top`."""
         g = self.evaluate(c, beta)
         result = np.empty(self._m + 1)
         result[0] = g
-        result[1:] = g * np.log1p(c)
+        result[1:] = g * np.log(self._base(c))
         return result
 
 
