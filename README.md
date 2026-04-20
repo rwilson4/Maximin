@@ -11,3 +11,9 @@ subject to  beta in S
 where `c` is a decision variable, `beta` is an uncertain parameter known only
 to lie within some uncertainty set `S`, and `C` is the feasible set for
 decisions.
+
+## Installation
+
+```bash
+pip install maximin
+```
