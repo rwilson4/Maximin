@@ -8,6 +8,7 @@ import numpy as np
 import numpy.typing as npt
 
 from maximin.confidence_regions import ConfidenceRegion, Ellipsoid
+from maximin.decision_spaces import DecisionSpace
 from maximin.outcome_models import CobbDouglas, MatrixGame, OutcomeModel
 
 
@@ -417,3 +418,109 @@ class DefaultDualObjective(DualObjective):
     def grad_c(self, c: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
         r"""Return :math:`\nabla_c g(c;\, \beta^*(c))` by the envelope theorem."""
         return self._model.grad_c(c, self.minimizer(c))
+
+
+class DefaultPrimalObjective(PrimalObjective):
+    r"""General primal objective via inner APG on :math:`c`.
+
+    For any :class:`~maximin.outcome_models.OutcomeModel` and
+    :class:`~maximin.decision_spaces.DecisionSpace`, approximates
+
+    .. math::
+
+        h(\beta) = \max_{c \in C} g(c;\, \beta)
+
+    by running FISTA (Beck & Teboulle, 2009) projected gradient **ascent**
+    on :math:`c \mapsto g(c;\, \beta)` over :math:`C`.  The outer
+    gradient is recovered by the envelope theorem:
+    :math:`\nabla_\beta h(\beta) = \nabla_\beta g(c^*(\beta);\, \beta)`.
+
+    When a closed-form primal is available, prefer it for speed and
+    precision.  This class is useful when no analytic formula exists.
+
+    Parameters
+    ----------
+    model : OutcomeModel
+        Outcome function providing ``evaluate``, ``grad_c``, and
+        ``grad_beta``.
+    space : DecisionSpace
+        Feasible set :math:`C` for ``c`` with a ``project`` method.
+    max_iter : int
+        Maximum FISTA iterations for each inner maximization call.
+    tol : float
+        Inner convergence tolerance on the iterate-change norm.
+    step_size : float
+        FISTA step size ``alpha``.  Must satisfy ``alpha <= 1/L`` where
+        ``L`` is the Lipschitz constant of
+        :math:`\nabla_c g(\cdot;\, \beta)`.  For
+        :class:`~maximin.outcome_models.MatrixGame` the gradient is
+        constant in ``c`` (Lipschitz constant zero), so any positive
+        value works.
+    """
+
+    def __init__(
+        self,
+        model: OutcomeModel,
+        space: DecisionSpace,
+        max_iter: int = 500,
+        tol: float = 1e-8,
+        step_size: float = 1e-2,
+    ) -> None:
+        if model.dim_c != space.dim:
+            raise ValueError(
+                f"model.dim_c ({model.dim_c}) must equal "
+                f"space.dim ({space.dim})"
+            )
+        self._model = model
+        self._space = space
+        self._max_iter = max_iter
+        self._tol = tol
+        self._step_size = step_size
+
+    def maximizer(self, beta: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+        r"""Find :math:`c^*(\beta)` via FISTA ascent on :math:`g(\cdot;\,\beta)` over :math:`C`.
+
+        The FISTA iterates are
+
+        .. math::
+
+            c_{k+1} &= \Pi_C\!\bigl(y_k + \alpha\,\nabla_c g(y_k;\,\beta)\bigr), \\
+            t_{k+1} &= \tfrac{1 + \sqrt{1 + 4t_k^2}}{2}, \\
+            y_{k+1} &= c_{k+1}
+                       + \tfrac{t_k-1}{t_{k+1}}(c_{k+1} - c_k).
+
+        The best iterate (highest :math:`g` value seen) is returned.
+        """
+        alpha = self._step_size
+        c = self._space.project(np.zeros(self._space.dim))
+        y = c.copy()
+        t = 1.0
+        best_c = c.copy()
+        best_obj = self._model.evaluate(c, beta)
+
+        for _ in range(self._max_iter):
+            grad = self._model.grad_c(y, beta)
+            c_new = self._space.project(y + alpha * grad)
+
+            obj = self._model.evaluate(c_new, beta)
+            if obj > best_obj:
+                best_obj = obj
+                best_c = c_new.copy()
+
+            if float(np.linalg.norm(c_new - c)) < self._tol:
+                break
+
+            t_new = 0.5 * (1.0 + math.sqrt(1.0 + 4.0 * t * t))
+            y = c_new + ((t - 1.0) / t_new) * (c_new - c)
+            c = c_new
+            t = t_new
+
+        return best_c
+
+    def evaluate(self, beta: npt.NDArray[np.float64]) -> float:
+        r"""Return :math:`g(c^*(\beta);\, \beta)`."""
+        return float(self._model.evaluate(self.maximizer(beta), beta))
+
+    def grad_beta(self, beta: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+        r"""Return :math:`\nabla_\beta g(c^*(\beta);\, \beta)` by the envelope theorem."""
+        return self._model.grad_beta(self.maximizer(beta), beta)
