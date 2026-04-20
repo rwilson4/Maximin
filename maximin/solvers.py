@@ -11,6 +11,7 @@ import numpy.typing as npt
 import scipy.optimize
 import scipy.sparse as sp
 
+from maximin._opt import _fista
 from maximin.confidence_regions import ConfidenceRegion, Ellipsoid, Hypercube
 from maximin.decision_spaces import AllocationDecision, DecisionSpace
 from maximin.outcome_models import MatrixGame
@@ -333,41 +334,22 @@ class AcceleratedProximalGradientDualSolver(DualSolver):
         c0: npt.NDArray[np.float64],
     ) -> SolverResult:
         """Run accelerated projected gradient ascent from ``c0``."""
-        alpha = self._step_size
-        c = self._space.project(c0.copy())
-        y = c.copy()
-        t = 1.0
-
-        best_c = c.copy()
-        best_obj = self._objective.evaluate(c)
-
-        for k in range(self._max_iter):
-            grad = self._objective.grad_c(y)
-            c_new = self._space.project(y + alpha * grad)
-
-            obj = self._objective.evaluate(c_new)
-            if obj > best_obj:
-                best_obj = obj
-                best_c = c_new.copy()
-
-            if float(np.linalg.norm(c_new - c)) < self._tol:
-                return SolverResult(
-                    x=best_c,
-                    objective=best_obj,
-                    n_iterations=k + 1,
-                    converged=True,
-                )
-
-            t_new = 0.5 * (1.0 + math.sqrt(1.0 + 4.0 * t * t))
-            y = c_new + ((t - 1.0) / t_new) * (c_new - c)
-            c = c_new
-            t = t_new
-
+        x0 = self._space.project(c0.copy())
+        best_c, best_obj, n_iters, converged = _fista(
+            grad_fn=self._objective.grad_c,
+            obj_fn=self._objective.evaluate,
+            project_fn=self._space.project,
+            x0=x0,
+            step_size=self._step_size,
+            max_iter=self._max_iter,
+            tol=self._tol,
+            minimize=False,
+        )
         return SolverResult(
             x=best_c,
             objective=best_obj,
-            n_iterations=self._max_iter,
-            converged=False,
+            n_iterations=n_iters,
+            converged=converged,
         )
 
 
