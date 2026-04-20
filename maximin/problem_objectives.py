@@ -7,6 +7,7 @@ from abc import ABC, abstractmethod
 import numpy as np
 import numpy.typing as npt
 
+from maximin._opt import _fista
 from maximin.confidence_regions import ConfidenceRegion, Ellipsoid
 from maximin.decision_spaces import DecisionSpace
 from maximin.outcome_models import CobbDouglas, MatrixGame, OutcomeModel
@@ -372,43 +373,25 @@ class DefaultDualObjective(DualObjective):
         self._step_size = step_size
 
     def minimizer(self, c: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
-        r"""Find :math:`\beta^*(c)` via FISTA descent on :math:`g(c;\,\cdot)` over :math:`S`.
+        r"""Find :math:`\beta^*(c)` via FISTA descent on :math:`g(c;\,\cdot)` over :math:`S`."""
 
-        The FISTA iterates are
+        def grad_fn(y: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+            return self._model.grad_beta(c, y)
 
-        .. math::
+        def obj_fn(beta: npt.NDArray[np.float64]) -> float:
+            return float(self._model.evaluate(c, beta))
 
-            \beta_{k+1} &= \Pi_S\!\bigl(y_k - \alpha\,\nabla_\beta g(c;\,y_k)\bigr), \\
-            t_{k+1}     &= \tfrac{1 + \sqrt{1 + 4t_k^2}}{2}, \\
-            y_{k+1}     &= \beta_{k+1}
-                           + \tfrac{t_k-1}{t_{k+1}}(\beta_{k+1} - \beta_k).
-
-        The best iterate (lowest :math:`g` value seen) is returned.
-        """
-        alpha = self._step_size
-        beta = self._region.project(np.zeros(self._region.dim))
-        y = beta.copy()
-        t = 1.0
-        best_beta = beta.copy()
-        best_obj = self._model.evaluate(c, beta)
-
-        for _ in range(self._max_iter):
-            grad = self._model.grad_beta(c, y)
-            beta_new = self._region.project(y - alpha * grad)
-
-            obj = self._model.evaluate(c, beta_new)
-            if obj < best_obj:
-                best_obj = obj
-                best_beta = beta_new.copy()
-
-            if float(np.linalg.norm(beta_new - beta)) < self._tol:
-                break
-
-            t_new = 0.5 * (1.0 + math.sqrt(1.0 + 4.0 * t * t))
-            y = beta_new + ((t - 1.0) / t_new) * (beta_new - beta)
-            beta = beta_new
-            t = t_new
-
+        x0 = self._region.project(np.zeros(self._region.dim))
+        best_beta, _, _, _ = _fista(
+            grad_fn=grad_fn,
+            obj_fn=obj_fn,
+            project_fn=self._region.project,
+            x0=x0,
+            step_size=self._step_size,
+            max_iter=self._max_iter,
+            tol=self._tol,
+            minimize=True,
+        )
         return best_beta
 
     def evaluate(self, c: npt.NDArray[np.float64]) -> float:
@@ -478,43 +461,25 @@ class DefaultPrimalObjective(PrimalObjective):
         self._step_size = step_size
 
     def maximizer(self, beta: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
-        r"""Find :math:`c^*(\beta)` via FISTA ascent on :math:`g(\cdot;\,\beta)` over :math:`C`.
+        r"""Find :math:`c^*(\beta)` via FISTA ascent on :math:`g(\cdot;\,\beta)` over :math:`C`."""
 
-        The FISTA iterates are
+        def grad_fn(y: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+            return self._model.grad_c(y, beta)
 
-        .. math::
+        def obj_fn(c: npt.NDArray[np.float64]) -> float:
+            return float(self._model.evaluate(c, beta))
 
-            c_{k+1} &= \Pi_C\!\bigl(y_k + \alpha\,\nabla_c g(y_k;\,\beta)\bigr), \\
-            t_{k+1} &= \tfrac{1 + \sqrt{1 + 4t_k^2}}{2}, \\
-            y_{k+1} &= c_{k+1}
-                       + \tfrac{t_k-1}{t_{k+1}}(c_{k+1} - c_k).
-
-        The best iterate (highest :math:`g` value seen) is returned.
-        """
-        alpha = self._step_size
-        c = self._space.project(np.zeros(self._space.dim))
-        y = c.copy()
-        t = 1.0
-        best_c = c.copy()
-        best_obj = self._model.evaluate(c, beta)
-
-        for _ in range(self._max_iter):
-            grad = self._model.grad_c(y, beta)
-            c_new = self._space.project(y + alpha * grad)
-
-            obj = self._model.evaluate(c_new, beta)
-            if obj > best_obj:
-                best_obj = obj
-                best_c = c_new.copy()
-
-            if float(np.linalg.norm(c_new - c)) < self._tol:
-                break
-
-            t_new = 0.5 * (1.0 + math.sqrt(1.0 + 4.0 * t * t))
-            y = c_new + ((t - 1.0) / t_new) * (c_new - c)
-            c = c_new
-            t = t_new
-
+        x0 = self._space.project(np.zeros(self._space.dim))
+        best_c, _, _, _ = _fista(
+            grad_fn=grad_fn,
+            obj_fn=obj_fn,
+            project_fn=self._space.project,
+            x0=x0,
+            step_size=self._step_size,
+            max_iter=self._max_iter,
+            tol=self._tol,
+            minimize=False,
+        )
         return best_c
 
     def evaluate(self, beta: npt.NDArray[np.float64]) -> float:
