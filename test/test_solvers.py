@@ -11,6 +11,7 @@ from maximin.decision_spaces import AllocationDecision
 from maximin.outcome_models import MatrixGame
 from maximin.problem_objectives import MatrixGameEllipsoidDualObjective
 from maximin.solvers import (
+    AcceleratedProximalGradientDualSolver,
     MarkowitzSolver,
     MaximinLinearSolver,
     ProximalSubgradientDualSolver,
@@ -107,6 +108,101 @@ class TestProximalSubgradientDualSolver:
     def test_result_not_worse_than_initial() -> None:
         """Best objective seen must be >= f(projected initial point)."""
         obj, space, solver = TestProximalSubgradientDualSolver._simple_problem()
+        c0 = np.array([0.5, 0.5])
+        initial_obj = obj.evaluate(space.project(c0))
+        result = solver.solve(c0)
+        assert result.objective >= initial_obj - 1e-12
+
+
+class TestAcceleratedProximalGradientDualSolver:
+    """Tests for AcceleratedProximalGradientDualSolver."""
+
+    @staticmethod
+    def _simple_problem() -> tuple[
+        MatrixGameEllipsoidDualObjective,
+        AllocationDecision,
+        AcceleratedProximalGradientDualSolver,
+    ]:
+        r"""Same 2-option known-answer problem used in other solver tests.
+
+        With A = I_2, beta_hat = [1, 0], Sigma = 0.01 I_2:
+
+        .. math::
+
+            f(c) = c_0 - 0.1\,\|c\|,
+
+        maximized over :math:`C = \{c \ge 0, c_0 + c_1 \le 1\}` at
+        :math:`c^* = [1, 0]` with :math:`f^* = 0.9`.
+        """
+        game = MatrixGame(np.eye(2))
+        region = Ellipsoid(np.array([1.0, 0.0]), 0.01 * np.eye(2))
+        obj = MatrixGameEllipsoidDualObjective(game, region)
+        space = AllocationDecision(2)
+        solver = AcceleratedProximalGradientDualSolver(obj, space, step_size=1.0)
+        return obj, space, solver
+
+    @staticmethod
+    def test_known_optimum() -> None:
+        """Solver must converge to c* = [1, 0] with objective ~0.9."""
+        _, _, solver = TestAcceleratedProximalGradientDualSolver._simple_problem()
+        result = solver.solve(np.array([0.5, 0.5]))
+        assert result.converged
+        np.testing.assert_allclose(result.x, [1.0, 0.0], atol=1e-6)
+        assert pytest.approx(result.objective, abs=1e-6) == 0.9
+
+    @staticmethod
+    def test_result_is_feasible() -> None:
+        """The returned point must lie in the decision space."""
+        obj, space, solver = TestAcceleratedProximalGradientDualSolver._simple_problem()
+        result = solver.solve(np.array([0.5, 0.5]))
+        assert space.contains(result.x), f"result.x={result.x} not in C"
+
+    @staticmethod
+    def test_objective_equals_evaluated() -> None:
+        """result.objective must equal obj.evaluate(result.x)."""
+        obj, _, solver = TestAcceleratedProximalGradientDualSolver._simple_problem()
+        result = solver.solve(np.array([0.3, 0.7]))
+        assert pytest.approx(result.objective, abs=1e-12) == obj.evaluate(result.x)
+
+    @staticmethod
+    def test_initial_point_projected() -> None:
+        """An infeasible initial point should be projected before iteration."""
+        obj, space, solver = TestAcceleratedProximalGradientDualSolver._simple_problem()
+        result = solver.solve(np.array([5.0, 5.0]))
+        assert space.contains(result.x)
+
+    @staticmethod
+    def test_matches_markowitz_on_random_problem() -> None:
+        r"""APG objective must be close to the global SOCP optimum.
+
+        MatrixGame + Ellipsoid yields a differentiable dual objective, so
+        APG's true-gradient steps should converge to near the optimum found
+        by the exact SOCP solver.
+        """
+        np.random.seed(999)
+        m, n = 20, 10
+        A = np.random.randn(m, n)
+        beta_hat = np.random.randn(n)
+        R = np.random.randn(n, n)
+        Sigma = R.T @ R + np.eye(n)
+        game = MatrixGame(A)
+        region = Ellipsoid(beta_hat, Sigma)
+        space = AllocationDecision(m)
+        obj = MatrixGameEllipsoidDualObjective(game, region)
+
+        c0 = np.ones(m) / m
+        socp_result = MarkowitzSolver(game, region, space).solve(c0)
+        apg_result = AcceleratedProximalGradientDualSolver(
+            obj, space, max_iter=5_000, step_size=0.1
+        ).solve(c0)
+
+        assert space.contains(apg_result.x), "APG result not feasible"
+        assert socp_result.objective >= apg_result.objective - 1e-4
+
+    @staticmethod
+    def test_result_not_worse_than_initial() -> None:
+        """Best objective seen must be >= f(projected initial point)."""
+        obj, space, solver = TestAcceleratedProximalGradientDualSolver._simple_problem()
         c0 = np.array([0.5, 0.5])
         initial_obj = obj.evaluate(space.project(c0))
         result = solver.solve(c0)
