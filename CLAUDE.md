@@ -8,8 +8,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 uv run pytest test/                        # run all tests
 uv run pytest test/test_solvers.py         # run one test file
 uv run pytest test/test_solvers.py::TestProximalSubgradientDualSolver::test_known_optimum  # run one test
-uv run ruff check maximin/                 # lint
-uv run mypy maximin/                       # type-check
+uv run ruff check maximin/ test/           # lint
+uv run mypy maximin/ test/                 # type-check
 uv run black maximin/ test/               # format
 ```
 
