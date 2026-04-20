@@ -6,11 +6,16 @@ import time
 import numpy as np
 import pytest
 
-from maximin.confidence_regions import Ellipsoid
+from maximin.confidence_regions import Ellipsoid, Hypercube
 from maximin.decision_spaces import AllocationDecision
 from maximin.outcome_models import MatrixGame
 from maximin.problem_objectives import MatrixGameEllipsoidDualObjective
-from maximin.solvers import MarkowitzSolver, ProximalSubgradientDualSolver, SolverResult
+from maximin.solvers import (
+    MarkowitzSolver,
+    MaximinLinearSolver,
+    ProximalSubgradientDualSolver,
+    SolverResult,
+)
 
 
 class TestSolverResult:
@@ -255,3 +260,99 @@ def test_markowitz_solver_benchmark(
     assert socp.converged, "SOCP did not converge"
     # SOCP is globally optimal; subgradient cannot exceed it.
     assert socp.objective >= sg.objective - 1e-4
+
+
+class TestMaximinLinearSolver:
+    r"""Tests for the LP-based MaximinLinearSolver.
+
+    Known-answer problem: A = I_2, lo = [0.8, 0], hi = [1, 0.2].
+
+    For c >= 0 the inner minimum places beta at its lower bound when the
+    corresponding gradient component is non-negative:
+
+    .. math::
+
+        f(c) = \min_{\substack{0.8 \le \beta_1 \le 1 \\ 0 \le \beta_2 \le 0.2}}
+               c_1 \beta_1 + c_2 \beta_2 = 0.8\,c_1
+
+    so the maximum over C = {c >= 0, c_1 + c_2 <= 1} is 0.8 at c* = [1, 0].
+    """
+
+    @staticmethod
+    def _simple_problem() -> tuple[MatrixGame, Hypercube, AllocationDecision]:
+        return (
+            MatrixGame(np.eye(2)),
+            Hypercube(np.array([0.8, 0.0]), np.array([1.0, 0.2])),
+            AllocationDecision(2),
+        )
+
+    @staticmethod
+    def test_known_optimum() -> None:
+        """Solver must recover c* = [1, 0] with f* = 0.8."""
+        game, region, space = TestMaximinLinearSolver._simple_problem()
+        result = MaximinLinearSolver(game, region, space).solve(np.zeros(2))
+        assert result.converged
+        np.testing.assert_allclose(result.x, [1.0, 0.0], atol=1e-8)
+        assert pytest.approx(result.objective, abs=1e-8) == 0.8
+
+    @staticmethod
+    def test_result_feasible() -> None:
+        """The returned point must lie in C."""
+        game, region, space = TestMaximinLinearSolver._simple_problem()
+        result = MaximinLinearSolver(game, region, space).solve(np.zeros(2))
+        assert space.contains(result.x)
+
+    @staticmethod
+    def test_objective_equals_evaluated() -> None:
+        """result.objective must equal min_{beta in S} c*^T A beta."""
+        game, region, space = TestMaximinLinearSolver._simple_problem()
+        result = MaximinLinearSolver(game, region, space).solve(np.zeros(2))
+        A = game.A
+        lo, hi = region.lo, region.hi
+        p = A.T @ result.x
+        beta_star = np.where(p >= 0, lo, hi)
+        expected = float(p @ beta_star)
+        assert pytest.approx(result.objective, abs=1e-10) == expected
+
+    @staticmethod
+    def test_dim_mismatch_c_raises() -> None:
+        """Mismatched game.dim_c and space.dim must raise ValueError."""
+        game = MatrixGame(np.eye(3))
+        region = Hypercube(np.zeros(3), np.ones(3))
+        space = AllocationDecision(2)
+        with pytest.raises(ValueError, match="dim_c"):
+            MaximinLinearSolver(game, region, space)
+
+    @staticmethod
+    def test_dim_mismatch_beta_raises() -> None:
+        """Mismatched game.dim_beta and region.dim must raise ValueError."""
+        game = MatrixGame(np.ones((3, 3)))
+        region = Hypercube(np.zeros(2), np.ones(2))
+        space = AllocationDecision(3)
+        with pytest.raises(ValueError, match="dim_beta"):
+            MaximinLinearSolver(game, region, space)
+
+    @staticmethod
+    def test_globally_optimal_on_random_problem() -> None:
+        """LP objective must dominate all randomly sampled feasible c."""
+        np.random.seed(7777)
+        m, n = 6, 4
+        A = np.random.randn(m, n)
+        lo = -np.random.rand(n)
+        hi = lo + np.random.rand(n) + 0.1
+        game = MatrixGame(A)
+        region = Hypercube(lo, hi)
+        space = AllocationDecision(m)
+
+        result = MaximinLinearSolver(game, region, space).solve(np.zeros(m))
+        assert result.converged
+
+        # Verify no random feasible c beats the LP optimum.
+        rng = np.random.default_rng(42)
+        for _ in range(200):
+            raw = rng.random(m)
+            c = raw / max(raw.sum(), 1.0)
+            p = A.T @ c
+            beta = np.where(p >= 0, lo, hi)
+            f_c = float(p @ beta)
+            assert f_c <= result.objective + 1e-8

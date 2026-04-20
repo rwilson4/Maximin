@@ -8,9 +8,10 @@ from dataclasses import dataclass
 import clarabel
 import numpy as np
 import numpy.typing as npt
+import scipy.optimize
 import scipy.sparse as sp
 
-from maximin.confidence_regions import ConfidenceRegion, Ellipsoid
+from maximin.confidence_regions import ConfidenceRegion, Ellipsoid, Hypercube
 from maximin.decision_spaces import AllocationDecision, DecisionSpace
 from maximin.outcome_models import MatrixGame
 from maximin.problem_objectives import (
@@ -461,4 +462,117 @@ class MarkowitzSolver(DualSolver):
             objective=self._objective.evaluate(c_star),
             n_iterations=solution.iterations,
             converged=converged,
+        )
+
+
+class MaximinLinearSolver(DualSolver):
+    r"""Exact LP solver for the MatrixGame--Hypercube maximin problem.
+
+    Solves
+
+    .. math::
+
+        \max_{c \in C}\, \min_{\beta \in S}\, c^\top A \beta
+
+    where :math:`C = \{c \ge 0,\, \sum_i c_i \le 1\}` and
+    :math:`S = \{\beta : \ell \le \beta \le u\}` by reformulating via LP
+    duality on the inner minimization:
+
+    .. math::
+
+        \begin{aligned}
+        \max_{c,\, \mu_\ell,\, \mu_u \ge 0}\quad & \ell^\top \mu_\ell - u^\top \mu_u \\
+        \text{s.t.}\quad
+            & \mu_\ell - \mu_u = A^\top c \\
+            & c \ge 0,\quad \textstyle\sum_i c_i \le 1
+        \end{aligned}
+
+    Parameters
+    ----------
+    game : MatrixGame
+        Bilinear outcome model with payoff matrix ``A``, shape ``(m, n)``.
+    region : Hypercube
+        Box uncertainty set with lower bounds ``lo`` and upper bounds ``hi``.
+    space : AllocationDecision
+        Feasible set for the decision ``c``.
+    """
+
+    def __init__(
+        self,
+        game: MatrixGame,
+        region: Hypercube,
+        space: AllocationDecision,
+    ) -> None:
+        if game.dim_c != space.dim:
+            raise ValueError(
+                f"game.dim_c ({game.dim_c}) must equal space.dim ({space.dim})"
+            )
+        if game.dim_beta != region.dim:
+            raise ValueError(
+                f"game.dim_beta ({game.dim_beta}) must equal "
+                f"region.dim ({region.dim})"
+            )
+        self._game = game
+        self._region = region
+        self._space = space
+
+    def solve(
+        self,
+        c0: npt.NDArray[np.float64],
+    ) -> SolverResult:
+        r"""Solve the LP to global optimality via HiGHS.
+
+        Parameters
+        ----------
+        c0 : npt.NDArray[np.float64]
+            Ignored; provided for API compatibility with
+            :class:`DualSolver`.
+
+        Returns
+        -------
+        SolverResult
+            Optimal decision ``c*``, objective value ``f(c*)``,
+            LP simplex iteration count, and convergence flag.
+        """
+        A = self._game.A  # (m, n)
+        lo = self._region.lo  # (n,)
+        hi = self._region.hi  # (n,)
+        m, n = A.shape
+
+        # Variables: x = [c (m), mu_lo (n), mu_hi (n)]
+        # Maximize lo^T mu_lo - hi^T mu_hi  =>  minimize -lo^T mu_lo + hi^T mu_hi
+        c_obj = np.concatenate([np.zeros(m), -lo, hi])
+
+        # Equality: mu_lo - mu_hi = A^T c  =>  [-A^T | I | -I] x = 0
+        A_eq = np.hstack([-A.T, np.eye(n), -np.eye(n)])
+        b_eq = np.zeros(n)
+
+        # Inequality: sum(c) <= 1
+        A_ub = np.concatenate([np.ones(m), np.zeros(2 * n)])[np.newaxis, :]
+        b_ub = np.array([1.0])
+
+        bounds = [(0.0, None)] * (m + 2 * n)
+
+        result = scipy.optimize.linprog(
+            c_obj,
+            A_ub=A_ub,
+            b_ub=b_ub,
+            A_eq=A_eq,
+            b_eq=b_eq,
+            bounds=bounds,
+            method="highs",
+        )
+
+        c_star = self._space.project(np.array(result.x[:m]))
+
+        # Compute f(c*) = min_{beta in S} (A^T c*)^T beta directly.
+        p = A.T @ c_star  # (n,)
+        beta_star = np.where(p >= 0, lo, hi)
+        objective = float(p @ beta_star)
+
+        return SolverResult(
+            x=c_star,
+            objective=objective,
+            n_iterations=result.nit,
+            converged=(result.status == 0),
         )
