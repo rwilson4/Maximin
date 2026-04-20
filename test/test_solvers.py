@@ -43,13 +43,11 @@ class TestProximalSubgradientDualSolver:
     """Tests for ProximalSubgradientDualSolver."""
 
     @staticmethod
-    def _simple_problem() -> (
-        tuple[
-            MatrixGameEllipsoidDualObjective,
-            AllocationDecision,
-            ProximalSubgradientDualSolver,
-        ]
-    ):
+    def _simple_problem() -> tuple[
+        MatrixGameEllipsoidDualObjective,
+        AllocationDecision,
+        ProximalSubgradientDualSolver,
+    ]:
         r"""Set up a 2-option game with a known analytic optimum.
 
         With A = I_2, beta_hat = [1, 0], Sigma = 0.01 I_2:
@@ -127,9 +125,7 @@ def test_dual_solver_feasible_random(seed: int, m: int, n: int) -> None:
     region = Ellipsoid(beta_hat, Sigma)
     obj = MatrixGameEllipsoidDualObjective(game, region)
     space = AllocationDecision(m)
-    solver = ProximalSubgradientDualSolver(
-        obj, space, max_iter=500, step_size=0.5
-    )
+    solver = ProximalSubgradientDualSolver(obj, space, max_iter=500, step_size=0.5)
     c0 = np.ones(m) / m
     result = solver.solve(c0)
     assert space.contains(result.x), f"result not feasible: {result.x}"

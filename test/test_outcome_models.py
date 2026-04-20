@@ -2,7 +2,6 @@
 """Tests for outcome models."""
 
 import numpy as np
-import numpy.typing as npt
 import pytest
 
 from maximin.outcome_models import MatrixGame
@@ -117,8 +116,6 @@ def test_matrix_game_grad_beta_finite_difference(seed: int, m: int, n: int) -> N
         b_plus[i] += eps
         b_minus = beta.copy()
         b_minus[i] -= eps
-        grad_fd[i] = (game.evaluate(c, b_plus) - game.evaluate(c, b_minus)) / (
-            2 * eps
-        )
+        grad_fd[i] = (game.evaluate(c, b_plus) - game.evaluate(c, b_minus)) / (2 * eps)
 
     np.testing.assert_allclose(grad_fd, game.grad_beta(c, beta), rtol=1e-5)

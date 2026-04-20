@@ -40,9 +40,7 @@ class DualObjective(ABC):
         """
 
     @abstractmethod
-    def grad_c(
-        self, c: npt.NDArray[np.float64]
-    ) -> npt.NDArray[np.float64]:
+    def grad_c(self, c: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
         r"""Gradient (or supergradient) of :math:`h` with respect to ``c``.
 
         By the envelope theorem,
@@ -61,9 +59,7 @@ class DualObjective(ABC):
         """
 
     @abstractmethod
-    def minimizer(
-        self, c: npt.NDArray[np.float64]
-    ) -> npt.NDArray[np.float64]:
+    def minimizer(self, c: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
         r"""Return :math:`\beta^*(c) = \arg\min_{\beta \in S} g(c;\, \beta)`.
 
         Parameters
@@ -107,9 +103,7 @@ class PrimalObjective(ABC):
         """
 
     @abstractmethod
-    def grad_beta(
-        self, beta: npt.NDArray[np.float64]
-    ) -> npt.NDArray[np.float64]:
+    def grad_beta(self, beta: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
         r"""Gradient (or subgradient) of :math:`f` with respect to ``beta``.
 
         By the envelope theorem,
@@ -128,9 +122,7 @@ class PrimalObjective(ABC):
         """
 
     @abstractmethod
-    def maximizer(
-        self, beta: npt.NDArray[np.float64]
-    ) -> npt.NDArray[np.float64]:
+    def maximizer(self, beta: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
         r"""Return :math:`c^*(\beta) = \arg\max_{c \in C} g(c;\, \beta)`.
 
         Parameters
@@ -220,9 +212,7 @@ class MatrixGameEllipsoidDualObjective(DualObjective):
         norm = math.sqrt(max(float(np.dot(At_c, Sigma_At_c)), 0.0))
         return At_c, Sigma_At_c, norm
 
-    def minimizer(
-        self, c: npt.NDArray[np.float64]
-    ) -> npt.NDArray[np.float64]:
+    def minimizer(self, c: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
         r"""Return :math:`\beta^*(c) = \hat\beta - \Sigma A^\top c \,/\, \|\Sigma^{1/2} A^\top c\|`."""
         beta_hat = self._region.beta_hat
         _, Sigma_At_c, norm = self._at_c_quantities(c)
@@ -237,8 +227,6 @@ class MatrixGameEllipsoidDualObjective(DualObjective):
         _, _, norm = self._at_c_quantities(c)
         return float(np.dot(c, A @ beta_hat)) - norm
 
-    def grad_c(
-        self, c: npt.NDArray[np.float64]
-    ) -> npt.NDArray[np.float64]:
+    def grad_c(self, c: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
         r"""Return :math:`A \beta^*(c)`, the gradient with respect to ``c``."""
         return self._game.A @ self.minimizer(c)

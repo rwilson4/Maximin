@@ -1,8 +1,6 @@
 # pyre-unsafe
 """Tests for dual and primal objectives."""
 
-import math
-
 import numpy as np
 import pytest
 
@@ -101,7 +99,7 @@ class TestMatrixGameEllipsoidDualObjective:
     @staticmethod
     def test_dimension_mismatch_raises() -> None:
         """Mismatched game/region dimensions should raise ValueError."""
-        game = MatrixGame(np.eye(3))   # dim_beta = 3
+        game = MatrixGame(np.eye(3))  # dim_beta = 3
         region = Ellipsoid(np.zeros(2), np.eye(2))  # dim = 2
         with pytest.raises(ValueError, match="dim_beta"):
             MatrixGameEllipsoidDualObjective(game, region)

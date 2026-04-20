@@ -99,9 +99,7 @@ class Ellipsoid(ConfidenceRegion):
             )
         n = len(beta_hat)
         if Sigma.shape != (n, n):
-            raise ValueError(
-                f"Sigma must have shape ({n}, {n}), got {Sigma.shape}"
-            )
+            raise ValueError(f"Sigma must have shape ({n}, {n}), got {Sigma.shape}")
         d, Q = np.linalg.eigh(Sigma)
         if np.any(d <= 0.0):
             raise ValueError("Sigma must be positive definite")
