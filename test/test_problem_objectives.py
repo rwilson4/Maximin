@@ -226,7 +226,9 @@ class TestDefaultDualObjective:
         """The APG minimizer must lie in S."""
         _, region, _, default = TestDefaultDualObjective._make_problem()
         for c in [np.array([1.0, 0.0]), np.array([0.5, 0.5]), np.array([0.3, 0.7])]:
-            assert region.contains(default.minimizer(c)), f"minimizer outside S for c={c}"
+            assert region.contains(
+                default.minimizer(c)
+            ), f"minimizer outside S for c={c}"
 
     @staticmethod
     def test_evaluate_equals_g_at_minimizer() -> None:
@@ -234,7 +236,9 @@ class TestDefaultDualObjective:
         game, _, _, default = TestDefaultDualObjective._make_problem()
         c = np.array([0.7, 0.3])
         beta_star = default.minimizer(c)
-        assert pytest.approx(default.evaluate(c), abs=1e-12) == game.evaluate(c, beta_star)
+        assert pytest.approx(default.evaluate(c), abs=1e-12) == game.evaluate(
+            c, beta_star
+        )
 
     @staticmethod
     def test_grad_c_by_envelope() -> None:
@@ -274,9 +278,7 @@ class TestDefaultDualObjective:
         region = Ellipsoid(beta_hat, Sigma)
         space = AllocationDecision(m)
         analytic_obj = MatrixGameEllipsoidDualObjective(game, region)
-        default_obj = DefaultDualObjective(
-            game, region, max_iter=500, step_size=0.5
-        )
+        default_obj = DefaultDualObjective(game, region, max_iter=500, step_size=0.5)
         c0 = np.ones(m) / m
 
         t0 = time.perf_counter()
@@ -337,8 +339,8 @@ def test_default_vs_analytic_random(seed: int, m: int, n: int) -> None:
         c = np.abs(rng.standard_normal(m))
         c /= c.sum()
         assert region.contains(default.minimizer(c)), "minimizer not feasible"
-        assert (
-            pytest.approx(default.evaluate(c), abs=1e-3) == analytic.evaluate(c)
+        assert pytest.approx(default.evaluate(c), abs=1e-3) == analytic.evaluate(
+            c
         ), f"value mismatch at c={c}"
 
 
@@ -358,7 +360,9 @@ class TestDefaultPrimalObjective:
     ) -> tuple[MatrixGame, AllocationDecision, DefaultPrimalObjective]:
         game = MatrixGame(np.eye(2))
         space = AllocationDecision(2)
-        obj = DefaultPrimalObjective(game, space, max_iter=max_iter, step_size=step_size)
+        obj = DefaultPrimalObjective(
+            game, space, max_iter=max_iter, step_size=step_size
+        )
         return game, space, obj
 
     @staticmethod
@@ -384,7 +388,9 @@ class TestDefaultPrimalObjective:
         """The APG maximizer must lie in C."""
         game, space, obj = TestDefaultPrimalObjective._make_problem()
         for beta in [np.array([0.9, 0.0]), np.array([0.5, 0.5]), np.array([0.2, 0.8])]:
-            assert space.contains(obj.maximizer(beta)), f"maximizer outside C for beta={beta}"
+            assert space.contains(
+                obj.maximizer(beta)
+            ), f"maximizer outside C for beta={beta}"
 
     @staticmethod
     def test_evaluate_equals_g_at_maximizer() -> None:
@@ -392,7 +398,9 @@ class TestDefaultPrimalObjective:
         game, _, obj = TestDefaultPrimalObjective._make_problem()
         beta = np.array([0.7, 0.3])
         c_star = obj.maximizer(beta)
-        assert pytest.approx(obj.evaluate(beta), abs=1e-12) == game.evaluate(c_star, beta)
+        assert pytest.approx(obj.evaluate(beta), abs=1e-12) == game.evaluate(
+            c_star, beta
+        )
 
     @staticmethod
     def test_grad_beta_by_envelope() -> None:
@@ -431,7 +439,9 @@ class TestDefaultPrimalObjective:
         region = Ellipsoid(beta_hat, Sigma)
         space = AllocationDecision(m)
         analytic_dual = MatrixGameEllipsoidDualObjective(game, region)
-        default_primal = DefaultPrimalObjective(game, space, max_iter=500, step_size=0.5)
+        default_primal = DefaultPrimalObjective(
+            game, space, max_iter=500, step_size=0.5
+        )
 
         c0 = np.ones(m) / m
         beta0 = region.project(np.zeros(n))

@@ -451,8 +451,7 @@ class DefaultPrimalObjective(PrimalObjective):
     ) -> None:
         if model.dim_c != space.dim:
             raise ValueError(
-                f"model.dim_c ({model.dim_c}) must equal "
-                f"space.dim ({space.dim})"
+                f"model.dim_c ({model.dim_c}) must equal " f"space.dim ({space.dim})"
             )
         self._model = model
         self._space = space
