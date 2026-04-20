@@ -3,8 +3,9 @@
 
 from maximin.confidence_regions import ConfidenceRegion, Ellipsoid, Hypercube
 from maximin.decision_spaces import AllocationDecision, DecisionSpace
-from maximin.outcome_models import MatrixGame, OutcomeModel
+from maximin.outcome_models import CobbDouglas, MatrixGame, OutcomeModel
 from maximin.problem_objectives import (
+    CobbDouglasEllipsoidDualObjective,
     DualObjective,
     MatrixGameEllipsoidDualObjective,
     PrimalObjective,
@@ -23,6 +24,8 @@ from maximin.solvers import (
 __all__ = [
     "AcceleratedProximalGradientDualSolver",
     "AllocationDecision",
+    "CobbDouglas",
+    "CobbDouglasEllipsoidDualObjective",
     "ConfidenceRegion",
     "DecisionSpace",
     "DualObjective",

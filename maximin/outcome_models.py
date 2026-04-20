@@ -88,6 +88,85 @@ class OutcomeModel(ABC):
         """
 
 
+class CobbDouglas(OutcomeModel):
+    r"""Cobb--Douglas outcome model.
+
+    .. math::
+
+        g(c;\,\beta)
+            = e^{\beta_0}\,\prod_{i=1}^{m}(1 + c_i)^{\beta_i}
+
+    ``c`` represents resource allocations across ``m`` goods.  ``beta[0]``
+    is the log baseline output and ``beta[1:]`` are the output elasticities.
+
+    Parameters
+    ----------
+    m : int
+        Number of goods; dimension of ``c``.  Must be >= 1.
+
+    Notes
+    -----
+    ``dim_c = m`` and ``dim_beta = m + 1``.
+
+    Gradients:
+
+    .. math::
+
+        \frac{\partial g}{\partial c_i}
+            = \frac{\beta_i}{1 + c_i}\,g, \qquad
+        \nabla_\beta g
+            = g\,\bigl[1,\,\log(1+c_1),\,\dots,\,\log(1+c_m)\bigr]^\top.
+
+    The model is concave in ``c`` when every ``beta[i] >= 0`` (for
+    ``i >= 1``) and ``sum(beta[1:]) < 1``, and log-linear (hence convex)
+    in ``beta`` for every fixed ``c >= 0``.
+    """
+
+    def __init__(self, m: int) -> None:
+        if m < 1:
+            raise ValueError(f"m must be >= 1, got {m}")
+        self._m = m
+
+    @property
+    def dim_c(self) -> int:
+        """Dimension of the decision variable c."""
+        return self._m
+
+    @property
+    def dim_beta(self) -> int:
+        """Dimension of the parameter vector beta."""
+        return self._m + 1
+
+    def evaluate(
+        self,
+        c: npt.NDArray[np.float64],
+        beta: npt.NDArray[np.float64],
+    ) -> float:
+        r"""Evaluate :math:`e^{\beta_0}\prod_i(1+c_i)^{\beta_i}`."""
+        log_g = beta[0] + float(np.dot(beta[1:], np.log1p(c)))
+        return float(np.exp(log_g))
+
+    def grad_c(
+        self,
+        c: npt.NDArray[np.float64],
+        beta: npt.NDArray[np.float64],
+    ) -> npt.NDArray[np.float64]:
+        r"""Return :math:`g \cdot \beta_{1:m} / (1 + c)`."""
+        return self.evaluate(c, beta) * beta[1:] / (1.0 + c)
+
+    def grad_beta(
+        self,
+        c: npt.NDArray[np.float64],
+        beta: npt.NDArray[np.float64],
+    ) -> npt.NDArray[np.float64]:
+        r"""Return :math:`g \cdot [1, \log(1+c_1), \dots, \log(1+c_m)]^\top`."""
+        g = self.evaluate(c, beta)
+        result = np.empty(self._m + 1)
+        result[0] = g
+        result[1:] = g * np.log1p(c)
+        return result
+
+
 class MatrixGame(OutcomeModel):
     r"""Bilinear outcome model :math:`g(c; \beta) = c^\top A \beta`.
 

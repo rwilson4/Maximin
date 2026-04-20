@@ -8,7 +8,7 @@ import numpy as np
 import numpy.typing as npt
 
 from maximin.confidence_regions import Ellipsoid
-from maximin.outcome_models import MatrixGame
+from maximin.outcome_models import CobbDouglas, MatrixGame
 
 
 class DualObjective(ABC):
@@ -230,3 +230,81 @@ class MatrixGameEllipsoidDualObjective(DualObjective):
     def grad_c(self, c: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
         r"""Return :math:`A \beta^*(c)`, the gradient with respect to ``c``."""
         return self._game.A @ self.minimizer(c)
+
+
+class CobbDouglasEllipsoidDualObjective(DualObjective):
+    r"""Closed-form dual objective for Cobb--Douglas with ellipsoidal uncertainty.
+
+    For :math:`g(c;\,\beta) = e^{\beta_0}\prod_i(1+c_i)^{\beta_i}` and the
+    ellipsoidal uncertainty set
+    :math:`S = \{\beta:(\beta-\hat\beta)^\top\Sigma^{-1}(\beta-\hat\beta)\le 1\}`,
+
+    the inner minimization has a closed form.  Writing
+    :math:`v(c) = [1,\log(1+c_1),\dots,\log(1+c_m)]^\top` gives
+    :math:`g = \exp(v^\top\beta)`, so minimizing :math:`g` over :math:`S` is
+    equivalent to minimizing the linear function :math:`v^\top\beta` over the
+    ellipsoid, which yields
+
+    .. math::
+
+        \beta^*(c) = \hat\beta
+                   - \frac{\Sigma\,v(c)}{\sqrt{v(c)^\top\Sigma\,v(c)}},
+        \qquad
+        f(c) = \exp\!\Bigl(v(c)^\top\hat\beta
+                          - \sqrt{v(c)^\top\Sigma\,v(c)}\Bigr).
+
+    By the envelope theorem,
+    :math:`\nabla_c f(c) = \nabla_c g(c;\,\beta^*(c))
+    = f(c)\,\beta^*(c)_{1:m}\,/\,(1+c)`.
+
+    Parameters
+    ----------
+    model : CobbDouglas
+        Cobb--Douglas outcome model with ``m`` goods.
+    region : Ellipsoid
+        Ellipsoidal uncertainty set for ``beta``.
+    """
+
+    def __init__(self, model: CobbDouglas, region: Ellipsoid) -> None:
+        if model.dim_beta != region.dim:
+            raise ValueError(
+                f"model.dim_beta ({model.dim_beta}) must equal "
+                f"region.dim ({region.dim})"
+            )
+        self._model = model
+        self._region = region
+
+    def _v(self, c: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+        v = np.empty(self._model.dim_beta)
+        v[0] = 1.0
+        v[1:] = np.log1p(c)
+        return v
+
+    def _quantities(
+        self, c: npt.NDArray[np.float64]
+    ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64], float, float]:
+        r"""Compute ``v``, ``Sigma @ v``, ``||Sigma^{1/2} v||``, and ``v^T beta_hat``."""
+        v = self._v(c)
+        Sigma = self._region.Sigma
+        Sigma_v = Sigma @ v
+        norm = math.sqrt(max(float(np.dot(v, Sigma_v)), 0.0))
+        a = float(np.dot(v, self._region.beta_hat))
+        return v, Sigma_v, norm, a
+
+    def minimizer(self, c: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+        r"""Return :math:`\beta^*(c) = \hat\beta - \Sigma v\,/\,\|\Sigma^{1/2}v\|`."""
+        _, Sigma_v, norm, _ = self._quantities(c)
+        beta_hat = self._region.beta_hat
+        if norm == 0.0:
+            return beta_hat.copy()
+        return beta_hat - Sigma_v / norm
+
+    def evaluate(self, c: npt.NDArray[np.float64]) -> float:
+        r"""Return :math:`f(c) = \exp(v^\top\hat\beta - \|\Sigma^{1/2}v\|)`."""
+        _, _, norm, a = self._quantities(c)
+        return float(math.exp(a - norm))
+
+    def grad_c(self, c: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+        r"""Return :math:`f(c)\,\beta^*(c)_{1:m}\,/\,(1+c)` by the envelope theorem."""
+        beta_star = self.minimizer(c)
+        return self.evaluate(c) * beta_star[1:] / (1.0 + c)
