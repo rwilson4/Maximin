@@ -56,10 +56,10 @@ class TestProximalSubgradientDualSolver:
 
         .. math::
 
-            h(c) = c_0 - 0.1\,\|c\|,
+            f(c) = c_0 - 0.1\,\|c\|,
 
         maximized over :math:`C = \{c \ge 0, c_0 + c_1 \le 1\}` at
-        :math:`c^* = [1, 0]` with :math:`h^* = 0.9`.
+        :math:`c^* = [1, 0]` with :math:`f^* = 0.9`.
         """
         game = MatrixGame(np.eye(2))
         region = Ellipsoid(np.array([1.0, 0.0]), 0.01 * np.eye(2))
@@ -100,7 +100,7 @@ class TestProximalSubgradientDualSolver:
 
     @staticmethod
     def test_result_not_worse_than_initial() -> None:
-        """Best objective seen must be >= h(projected initial point)."""
+        """Best objective seen must be >= f(projected initial point)."""
         obj, space, solver = TestProximalSubgradientDualSolver._simple_problem()
         c0 = np.array([0.5, 0.5])
         initial_obj = obj.evaluate(space.project(c0))
@@ -147,7 +147,7 @@ class TestMarkowitzSolver:
 
     @staticmethod
     def test_known_optimum() -> None:
-        """Solver must recover c* = [1, 0] with h* = 0.9 exactly."""
+        """Solver must recover c* = [1, 0] with f* = 0.9 exactly."""
         game, region, space = TestMarkowitzSolver._simple_problem()
         result = MarkowitzSolver(game, region, space).solve(np.zeros(2))
         assert result.converged

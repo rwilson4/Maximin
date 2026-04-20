@@ -12,21 +12,21 @@ from maximin.outcome_models import MatrixGame
 
 
 class DualObjective(ABC):
-    r"""Abstract base for the dual objective :math:`h(c)`.
+    r"""Abstract base for the dual objective :math:`f(c)`.
 
     The dual objective aggregates over the uncertainty set:
 
     .. math::
 
-        h(c) = \min_{\beta \in S} g(c;\, \beta).
+        f(c) = \min_{\beta \in S} g(c;\, \beta).
 
-    By the minimax theorem, maximizing :math:`h` over :math:`c \in C`
+    By the minimax theorem, maximizing :math:`f` over :math:`c \in C`
     yields the maximin value.
     """
 
     @abstractmethod
     def evaluate(self, c: npt.NDArray[np.float64]) -> float:
-        r"""Evaluate :math:`h(c) = \min_{\beta \in S} g(c; \beta)`.
+        r"""Evaluate :math:`f(c) = \min_{\beta \in S} g(c; \beta)`.
 
         Parameters
         ----------
@@ -41,10 +41,10 @@ class DualObjective(ABC):
 
     @abstractmethod
     def grad_c(self, c: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
-        r"""Gradient (or supergradient) of :math:`h` with respect to ``c``.
+        r"""Gradient (or supergradient) of :math:`f` with respect to ``c``.
 
         By the envelope theorem,
-        :math:`\nabla_c h(c) = \nabla_c g(c;\, \beta^*(c))`
+        :math:`\nabla_c f(c) = \nabla_c g(c;\, \beta^*(c))`
         when :math:`\beta^*(c)` is unique.
 
         Parameters
@@ -75,21 +75,21 @@ class DualObjective(ABC):
 
 
 class PrimalObjective(ABC):
-    r"""Abstract base for the primal objective :math:`f(\beta)`.
+    r"""Abstract base for the primal objective :math:`h(\beta)`.
 
     The primal objective is the best response over the decision space:
 
     .. math::
 
-        f(\beta) = \max_{c \in C} g(c;\, \beta).
+        h(\beta) = \max_{c \in C} g(c;\, \beta).
 
-    By the minimax theorem, minimizing :math:`f` over :math:`\beta \in S`
-    yields the same maximin value as maximizing :math:`h`.
+    By the minimax theorem, minimizing :math:`h` over :math:`\beta \in S`
+    yields the same maximin value as maximizing :math:`f`.
     """
 
     @abstractmethod
     def evaluate(self, beta: npt.NDArray[np.float64]) -> float:
-        r"""Evaluate :math:`f(\beta) = \max_{c \in C} g(c;\, \beta)`.
+        r"""Evaluate :math:`h(\beta) = \max_{c \in C} g(c;\, \beta)`.
 
         Parameters
         ----------
@@ -104,10 +104,10 @@ class PrimalObjective(ABC):
 
     @abstractmethod
     def grad_beta(self, beta: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
-        r"""Gradient (or subgradient) of :math:`f` with respect to ``beta``.
+        r"""Gradient (or subgradient) of :math:`h` with respect to ``beta``.
 
         By the envelope theorem,
-        :math:`\nabla_\beta f(\beta) = \nabla_\beta g(c^*(\beta);\, \beta)`
+        :math:`\nabla_\beta h(\beta) = \nabla_\beta g(c^*(\beta);\, \beta)`
         when :math:`c^*(\beta)` is unique.
 
         Parameters
@@ -155,7 +155,7 @@ class MatrixGameEllipsoidDualObjective(DualObjective):
 
     .. math::
 
-        h(c) = c^\top A \hat\beta
+        f(c) = c^\top A \hat\beta
                - \bigl\| \Sigma^{1/2} A^\top c \bigr\|_2.
 
     The worst-case parameter is
@@ -167,7 +167,7 @@ class MatrixGameEllipsoidDualObjective(DualObjective):
                      {\bigl\| \Sigma^{1/2} A^\top c \bigr\|_2},
 
     and by the envelope theorem
-    :math:`\nabla_c h(c) = A \beta^*(c)`.
+    :math:`\nabla_c f(c) = A \beta^*(c)`.
 
     Parameters
     ----------
@@ -221,7 +221,7 @@ class MatrixGameEllipsoidDualObjective(DualObjective):
         return beta_hat - Sigma_At_c / norm
 
     def evaluate(self, c: npt.NDArray[np.float64]) -> float:
-        r"""Evaluate :math:`h(c) = c^\top A \hat\beta - \|\Sigma^{1/2} A^\top c\|`."""
+        r"""Evaluate :math:`f(c) = c^\top A \hat\beta - \|\Sigma^{1/2} A^\top c\|`."""
         A = self._game.A
         beta_hat = self._region.beta_hat
         _, _, norm = self._at_c_quantities(c)
