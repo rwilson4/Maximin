@@ -1,6 +1,6 @@
 [project]
 name = "maximin"
-version = "0.1.0"
+version = "0.0.1"
 description = "Robust optimization: maximize worst-case objective over an uncertainty set"
 authors = [{ name = "Bob Wilson", email = "bob.wilson@convexanalytics.com" }]
 requires-python = ">=3.11,<4"
