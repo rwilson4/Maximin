@@ -9,6 +9,7 @@ from maximin.confidence_regions import (
     BinomialRegion,
     Ellipsoid,
     GammaRegion,
+    HuberCriterionRegion,
     Hypercube,
     PoissonRegion,
 )
@@ -612,3 +613,113 @@ def test_gamma_project_always_feasible(seed: int, m: int) -> None:
     for _ in range(15):
         beta = rng.uniform(0.1, 5.0, size=m)
         assert region.contains(region.project(beta)), "projection not feasible"
+
+
+class TestHuberCriterionRegion:
+    """Tests for HuberCriterionRegion."""
+
+    @staticmethod
+    def _make(p: int = 2, n: int = 50, seed: int = 0) -> HuberCriterionRegion:
+        rng = np.random.default_rng(seed)
+        X = rng.standard_normal((n, p))
+        beta_true = rng.standard_normal(p)
+        y = X @ beta_true + 0.1 * rng.standard_normal(n)
+        return HuberCriterionRegion(X, y, delta=1.5, threshold=1.0)
+
+    def test_beta_hat_is_inside(self) -> None:
+        region = self._make()
+        assert region.contains(region.beta_hat)
+
+    def test_dim(self) -> None:
+        assert self._make(p=3).dim == 3
+
+    def test_beta_hat_returns_copy(self) -> None:
+        region = self._make()
+        bh = region.beta_hat
+        bh[0] = 999.0
+        assert region.beta_hat[0] != 999.0
+
+    def test_project_inside_unchanged(self) -> None:
+        region = self._make()
+        beta = region.beta_hat
+        np.testing.assert_allclose(region.project(beta), beta, atol=1e-10)
+
+    def test_project_outside_feasible(self) -> None:
+        region = self._make(p=2)
+        outside = region.beta_hat + np.array([10.0, 10.0])
+        assert not region.contains(outside)
+        assert region.contains(region.project(outside))
+
+    def test_project_outside_on_boundary(self) -> None:
+        region = self._make(p=1, n=100)
+        outside = region.beta_hat + np.array([5.0])
+        proj = region.project(outside)
+        assert pytest.approx(region._excess(proj), abs=1e-4) == region._threshold
+
+    def test_project_idempotent(self) -> None:
+        region = self._make(p=2)
+        outside = region.beta_hat + np.array([5.0, 5.0])
+        proj = region.project(outside)
+        np.testing.assert_allclose(region.project(proj), proj, atol=1e-6)
+
+    def test_known_outside(self) -> None:
+        region = self._make(p=2)
+        far = region.beta_hat + np.array([100.0, 100.0])
+        assert not region.contains(far)
+
+    def test_invalid_X_not_2d(self) -> None:
+        with pytest.raises(ValueError, match="2-dimensional"):
+            HuberCriterionRegion(np.ones(5), np.ones(5), delta=1.0, threshold=1.0)
+
+    def test_invalid_y_not_1d(self) -> None:
+        with pytest.raises(ValueError, match="1-dimensional"):
+            HuberCriterionRegion(
+                np.ones((5, 2)), np.ones((5, 2)), delta=1.0, threshold=1.0
+            )
+
+    def test_invalid_shape_mismatch(self) -> None:
+        with pytest.raises(ValueError, match="same number of rows"):
+            HuberCriterionRegion(np.ones((5, 2)), np.ones(4), delta=1.0, threshold=1.0)
+
+    def test_invalid_delta_not_positive(self) -> None:
+        with pytest.raises(ValueError, match="positive"):
+            HuberCriterionRegion(np.ones((5, 2)), np.ones(5), delta=0.0, threshold=1.0)
+
+    def test_invalid_threshold_negative(self) -> None:
+        with pytest.raises(ValueError, match="non-negative"):
+            HuberCriterionRegion(np.ones((5, 2)), np.ones(5), delta=1.0, threshold=-0.1)
+
+
+@pytest.mark.parametrize(
+    "seed,p",
+    [(500, 1), (501, 2), (502, 3)],
+)
+def test_huber_project_always_feasible(seed: int, p: int) -> None:
+    """HuberCriterionRegion.project always yields a point in S."""
+    rng = np.random.default_rng(seed)
+    n = 40
+    X = rng.standard_normal((n, p))
+    y = X @ rng.standard_normal(p) + 0.2 * rng.standard_normal(n)
+    region = HuberCriterionRegion(X, y, delta=1.5, threshold=1.0)
+    for _ in range(10):
+        beta = region.beta_hat + rng.standard_normal(p) * 5.0
+        assert region.contains(region.project(beta)), "projection not feasible"
+
+
+@pytest.mark.parametrize(
+    "seed,p",
+    [(503, 1), (504, 2)],
+)
+def test_huber_project_idempotent(seed: int, p: int) -> None:
+    """HuberCriterionRegion.project is idempotent."""
+    rng = np.random.default_rng(seed)
+    n = 40
+    X = rng.standard_normal((n, p))
+    y = X @ rng.standard_normal(p) + 0.2 * rng.standard_normal(n)
+    region = HuberCriterionRegion(X, y, delta=1.5, threshold=1.0)
+    for _ in range(8):
+        beta = region.beta_hat + rng.standard_normal(p) * 5.0
+        proj = region.project(beta)
+        np.testing.assert_allclose(
+            region.project(proj), proj, atol=1e-6, err_msg="not idempotent"
+        )

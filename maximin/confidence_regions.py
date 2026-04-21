@@ -674,3 +674,282 @@ class GammaRegion(LogConcaveLikelihoodRegion):
     def _opt_bounds(self) -> list[tuple[float | None, float | None]]:
         eps = 1e-10
         return [(eps, None)] * self._m
+
+
+class CriterionRegion(ConfidenceRegion, ABC):
+    r"""Confidence region defined by a sublevel set of a convex criterion loss.
+
+    The region is:
+
+    .. math::
+
+        S = \bigl\{ \beta :
+            L(\beta) \le L(\hat\beta) + t \bigr\}
+
+    where :math:`L` is a convex loss, :math:`\hat\beta` is the loss minimizer,
+    and :math:`t` is the threshold.  Because :math:`L` is convex, :math:`S`
+    is convex.
+
+    Parameters
+    ----------
+    threshold : float
+        Excess-loss threshold ``t >= 0``.
+
+    Notes
+    -----
+    Subclasses must implement :attr:`beta_hat`, :meth:`loss`, and :attr:`dim`.
+    Overriding :meth:`grad_loss` with an analytic expression improves projection
+    speed; the default uses forward finite differences.
+
+    :meth:`project` solves
+
+    .. math::
+
+        \min_x \tfrac{1}{2}\|x - \beta\|^2 \quad\text{s.t.}\quad
+        L(x) \le L(\hat\beta) + t
+
+    via SLSQP, starting from a point strictly inside :math:`S` found by
+    bisection along the segment from :math:`\hat\beta` to ``beta``.
+    """
+
+    def __init__(self, threshold: float) -> None:
+        if threshold < 0:
+            raise ValueError(f"threshold must be non-negative, got {threshold}")
+        self._threshold = threshold
+        self._cached_loss_at_hat: float | None = None
+
+    @property
+    @abstractmethod
+    def beta_hat(self) -> npt.NDArray[np.float64]:
+        """Loss minimizer / center of the confidence region."""
+
+    @abstractmethod
+    def loss(self, beta: npt.NDArray[np.float64]) -> float:
+        """Convex criterion loss at ``beta``."""
+
+    def grad_loss(self, beta: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+        """Gradient of the loss (forward finite differences fallback)."""
+        eps = 1e-7
+        f0 = self.loss(beta)
+        grad = np.empty_like(beta)
+        for i in range(len(beta)):
+            beta_p = beta.copy()
+            beta_p[i] += eps
+            grad[i] = (self.loss(beta_p) - f0) / eps
+        return grad
+
+    @property
+    def _opt_bounds(
+        self,
+    ) -> list[tuple[float | None, float | None]] | None:
+        """Parameter-space bounds for the SLSQP optimizer. ``None`` = unbounded."""
+        return None
+
+    def _loss_at_hat(self) -> float:
+        if self._cached_loss_at_hat is None:
+            self._cached_loss_at_hat = self.loss(self.beta_hat)
+        return self._cached_loss_at_hat
+
+    def _excess(self, beta: npt.NDArray[np.float64]) -> float:
+        """Excess loss L(beta) - L(beta_hat).  Non-negative by convexity."""
+        return self.loss(beta) - self._loss_at_hat()
+
+    def contains(
+        self,
+        beta: npt.NDArray[np.float64],
+        atol: float = 1e-9,
+    ) -> bool:
+        r"""Return True if ``beta`` lies in :math:`S`."""
+        return bool(self._excess(beta) <= self._threshold + atol)
+
+    def project(
+        self,
+        beta: npt.NDArray[np.float64],
+    ) -> npt.NDArray[np.float64]:
+        r"""Project ``beta`` onto :math:`S` via SLSQP.
+
+        Parameters
+        ----------
+        beta : npt.NDArray[np.float64]
+            Point to project, shape ``(p,)``.
+
+        Returns
+        -------
+        npt.NDArray[np.float64]
+            Point in :math:`S` closest to ``beta`` in Euclidean distance,
+            shape ``(p,)``.
+        """
+        if self.contains(beta):
+            return beta.copy()
+        bounds = self._opt_bounds
+        beta_hat = self.beta_hat
+        lo: npt.NDArray[np.float64]
+        hi: npt.NDArray[np.float64]
+        if bounds is not None:
+            lo = np.array([b[0] if b[0] is not None else -np.inf for b in bounds])
+            hi = np.array([b[1] if b[1] is not None else np.inf for b in bounds])
+            beta_hat = np.clip(beta_hat, lo, hi)
+
+        # Avoid starting from the exact minimizer: grad_loss(beta_hat) = 0 makes
+        # the constraint Jacobian degenerate, causing SLSQP to terminate early.
+        # Binary-search for x0 strictly inside S but closer to beta.
+        t_lo, t_hi = 0.0, 1.0
+        for _ in range(30):
+            t_mid = (t_lo + t_hi) / 2.0
+            x_mid = beta_hat + t_mid * (beta - beta_hat)
+            if bounds is not None:
+                x_mid = np.clip(x_mid, lo, hi)
+            if self.contains(x_mid):
+                t_lo = t_mid
+            else:
+                t_hi = t_mid
+        x0 = beta_hat + t_lo * (beta - beta_hat)
+        if bounds is not None:
+            x0 = np.clip(x0, lo, hi)
+
+        threshold = self._threshold
+
+        def _constraint_val(x: npt.NDArray[np.float64]) -> float:
+            return float(threshold - self._excess(x))
+
+        def _constraint_jac(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+            return -self.grad_loss(x)
+
+        result = scipy.optimize.minimize(
+            fun=lambda x: 0.5 * float(np.dot(x - beta, x - beta)),
+            jac=lambda x: x - beta,
+            x0=x0,
+            method="SLSQP",
+            bounds=bounds,
+            constraints=[
+                {"type": "ineq", "fun": _constraint_val, "jac": _constraint_jac}
+            ],
+            options={"ftol": 1e-12, "maxiter": 1000},
+        )
+        result_x = result.x
+
+        # SLSQP's constraint satisfaction is ~1e-8; if the result is just
+        # outside S, binary-search toward beta_hat (always feasible) to
+        # recover a point that satisfies contains() with its default atol.
+        if not self.contains(result_x):
+            t_lo, t_hi = 0.0, 1.0
+            for _ in range(50):
+                t_mid = (t_lo + t_hi) / 2.0
+                x_mid = (1.0 - t_mid) * result_x + t_mid * beta_hat
+                if self.contains(x_mid):
+                    t_hi = t_mid
+                else:
+                    t_lo = t_mid
+            result_x = (1.0 - t_hi) * result_x + t_hi * beta_hat
+
+        return result_x
+
+
+class HuberCriterionRegion(CriterionRegion):
+    r"""Confidence region defined by the sublevel set of the Huber loss.
+
+    The region is:
+
+    .. math::
+
+        S = \bigl\{ \beta :
+            L(\beta) \le L(\hat\beta) + t \bigr\}
+
+    where the Huber loss is
+
+    .. math::
+
+        L(\beta) = \sum_{i=1}^n \rho_\delta(y_i - x_i^\top \beta),
+        \quad
+        \rho_\delta(r) = \begin{cases}
+            r^2/2 & |r| \le \delta, \\
+            \delta|r| - \delta^2/2 & |r| > \delta,
+        \end{cases}
+
+    :math:`\hat\beta` is the Huber M-estimator (minimizer of :math:`L`),
+    computed once via L-BFGS-B and cached, and :math:`t` is the
+    excess-loss threshold.
+
+    Parameters
+    ----------
+    X : npt.NDArray[np.float64]
+        Design matrix, shape ``(n, p)``.
+    y : npt.NDArray[np.float64]
+        Response vector, shape ``(n,)``.
+    delta : float
+        Huber robustness parameter ``delta > 0``.  Residuals larger than
+        ``delta`` are penalized linearly rather than quadratically.
+    threshold : float
+        Excess-loss threshold ``t >= 0``.
+    """
+
+    def __init__(
+        self,
+        X: npt.NDArray[np.float64],
+        y: npt.NDArray[np.float64],
+        delta: float,
+        threshold: float,
+    ) -> None:
+        if X.ndim != 2:
+            raise ValueError(f"X must be 2-dimensional, got shape {X.shape}")
+        if y.ndim != 1:
+            raise ValueError(f"y must be 1-dimensional, got shape {y.shape}")
+        if X.shape[0] != y.shape[0]:
+            raise ValueError(
+                f"X and y must have the same number of rows, "
+                f"got {X.shape[0]} and {y.shape[0]}"
+            )
+        if delta <= 0:
+            raise ValueError(f"delta must be positive, got {delta}")
+        super().__init__(threshold)
+        self._X = X.copy()
+        self._y = y.copy()
+        self._delta = delta
+        self._p = X.shape[1]
+        self._cached_beta_hat: npt.NDArray[np.float64] | None = None
+
+    @property
+    def dim(self) -> int:
+        """Dimension of the parameter space (number of predictors)."""
+        return self._p
+
+    @property
+    def beta_hat(self) -> npt.NDArray[np.float64]:
+        """Huber M-estimator: minimizer of the Huber loss, computed lazily."""
+        if self._cached_beta_hat is None:
+            self._cached_beta_hat = self._compute_beta_hat()
+        return self._cached_beta_hat.copy()
+
+    def _compute_beta_hat(self) -> npt.NDArray[np.float64]:
+        result = scipy.optimize.minimize(
+            fun=self.loss,
+            jac=self.grad_loss,
+            x0=np.zeros(self._p),
+            method="L-BFGS-B",
+            options={"ftol": 1e-15, "gtol": 1e-10, "maxiter": 2000},
+        )
+        return result.x
+
+    def loss(self, beta: npt.NDArray[np.float64]) -> float:
+        r"""Huber loss :math:`\sum_i \rho_\delta(y_i - x_i^\top\beta)`."""
+        r = self._y - self._X @ beta
+        return float(
+            np.sum(
+                np.where(
+                    np.abs(r) <= self._delta,
+                    r**2 / 2.0,
+                    self._delta * np.abs(r) - self._delta**2 / 2.0,
+                )
+            )
+        )
+
+    def grad_loss(self, beta: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+        r"""Gradient of the Huber loss: :math:`-X^\top \psi_\delta(y - X\beta)`.
+
+        The influence function is
+        :math:`\psi_\delta(r) = r` if :math:`|r| \le \delta`, else
+        :math:`\delta \operatorname{sign}(r)`.
+        """
+        r = self._y - self._X @ beta
+        psi = np.where(np.abs(r) <= self._delta, r, self._delta * np.sign(r))
+        return -self._X.T @ psi
