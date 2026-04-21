@@ -303,6 +303,7 @@ def test_hypercube_project_idempotent(seed: int, n: int) -> None:
 # BinomialRegion
 # ---------------------------------------------------------------------------
 
+
 class TestBinomialRegion:
     """Tests for BinomialRegion."""
 
@@ -408,6 +409,7 @@ class TestBinomialRegion:
 # PoissonRegion
 # ---------------------------------------------------------------------------
 
+
 class TestPoissonRegion:
     """Tests for PoissonRegion."""
 
@@ -480,6 +482,7 @@ class TestPoissonRegion:
 # GammaRegion
 # ---------------------------------------------------------------------------
 
+
 class TestGammaRegion:
     """Tests for GammaRegion."""
 
@@ -535,14 +538,13 @@ class TestGammaRegion:
 
     def test_invalid_shape_mismatch(self) -> None:
         with pytest.raises(ValueError, match="shape"):
-            GammaRegion(
-                np.array([2.0, 2.0]), np.array([10.0]), np.array([5.0]), 3.84
-            )
+            GammaRegion(np.array([2.0, 2.0]), np.array([10.0]), np.array([5.0]), 3.84)
 
 
 # ---------------------------------------------------------------------------
 # Parametric tests for all three LR region classes
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize(
     "seed,m",

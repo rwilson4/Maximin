@@ -662,9 +662,7 @@ class GammaRegion(LogConcaveLikelihoodRegion):
 
     def log_likelihood(self, beta: npt.NDArray[np.float64]) -> float:
         r"""Gamma joint log-likelihood (terms independent of :math:`\beta` omitted)."""
-        return float(
-            np.sum(self._n * self._alpha * np.log(beta) - beta * self._x_sum)
-        )
+        return float(np.sum(self._n * self._alpha * np.log(beta) - beta * self._x_sum))
 
     def grad_log_likelihood(
         self, beta: npt.NDArray[np.float64]
