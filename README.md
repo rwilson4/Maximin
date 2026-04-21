@@ -1,5 +1,7 @@
 # maximin
 
+[![CI](https://github.com/rwilson4/Maximin/actions/workflows/ci.yml/badge.svg)](https://github.com/rwilson4/Maximin/actions/workflows/ci.yml)
+
 Robust optimization solver for maximin problems of the form:
 
 ```
