@@ -109,7 +109,9 @@ def _fista(
                 step = x_new - y
                 obj_new = obj_fn(x_new)
                 step_sq = float(np.dot(step, step))
-                rhs = sign * (obj_y + float(np.dot(grad_y, step))) - step_sq / (2.0 * alpha)
+                rhs = sign * (obj_y + float(np.dot(grad_y, step))) - step_sq / (
+                    2.0 * alpha
+                )
                 if sign * obj_new >= rhs:
                     break
                 alpha /= backtrack_factor
