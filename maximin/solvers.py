@@ -20,6 +20,7 @@ from maximin.problem_objectives import (
     MatrixGameEllipsoidDualObjective,
     PrimalObjective,
 )
+from maximin.robust_constraints import MatrixGameEllipsoidRobustConstraint
 
 
 @dataclass(frozen=True)
@@ -353,6 +354,80 @@ class AcceleratedProximalGradientDualSolver(DualSolver):
         )
 
 
+def _build_markowitz_base_socp(
+    game: MatrixGame,
+    region: Ellipsoid,
+) -> tuple[
+    sp.csc_matrix,
+    npt.NDArray[np.float64],
+    sp.csc_matrix,
+    npt.NDArray[np.float64],
+]:
+    r"""Assemble the base Clarabel SOCP matrices for the Markowitz problem.
+
+    Variables: :math:`x = [c \;;\; t] \in \mathbb{R}^{m+1}`.
+
+    Constraint layout (rows of ``A``):
+
+    .. code-block:: text
+
+        rows  0..n    SOC_{n+1}:  [t ; L^T A^T c]
+        rows n+1..n+m  Nonneg_m:  c >= 0
+        row  n+m+1     Nonneg_1:  sum(c) <= 1
+
+    Returns
+    -------
+    tuple
+        ``(P, q, A, b)``.
+    """
+    A_mat = game.A  # (m, n)
+    beta_hat = region.beta_hat  # (n,)
+    Sigma = region.Sigma  # (n, n)
+    m, n = A_mat.shape
+
+    L = np.linalg.cholesky(Sigma)  # Sigma = L L^T
+    LT_AT = L.T @ A_mat.T  # (n, m)
+
+    P = sp.csc_matrix((m + 1, m + 1))
+
+    q = np.empty(m + 1)
+    q[:m] = -(A_mat @ beta_hat)
+    q[m] = 1.0
+
+    # SOC block: [0..0 -1 ; -L^T A^T  0]
+    soc_row0 = sp.hstack(
+        [sp.csc_matrix((1, m)), sp.csc_matrix([[-1.0]])],
+        format="csc",
+    )
+    soc_body = sp.hstack(
+        [sp.csc_matrix(-LT_AT), sp.csc_matrix((n, 1))],
+        format="csc",
+    )
+    A_soc = sp.vstack([soc_row0, soc_body], format="csc")  # (n+1) x (m+1)
+
+    # Non-negativity block
+    A_nn = sp.hstack(
+        [-sp.eye(m, format="csc"), sp.csc_matrix((m, 1))],
+        format="csc",
+    )  # m x (m+1)
+
+    # Budget block
+    ones_row = sp.csc_matrix(
+        (np.ones(m), (np.zeros(m, dtype=int), np.arange(m))),
+        shape=(1, m),
+    )
+    A_bud = sp.hstack(
+        [ones_row, sp.csc_matrix((1, 1))],
+        format="csc",
+    )  # 1 x (m+1)
+
+    A_total = sp.vstack([A_soc, A_nn, A_bud], format="csc")
+    b_total = np.zeros(n + 1 + m + 1)
+    b_total[-1] = 1.0  # budget RHS
+
+    return P, q, A_total, b_total
+
+
 class MarkowitzSolver(DualSolver):
     r"""Exact SOCP solver for the MatrixGame--Ellipsoid maximin problem.
 
@@ -424,77 +499,8 @@ class MarkowitzSolver(DualSolver):
         sp.csc_matrix,
         npt.NDArray[np.float64],
     ]:
-        r"""Assemble the Clarabel SOCP matrices.
-
-        Returns
-        -------
-        tuple
-            ``(P, q, A, b)`` where ``P`` is the (zero) quadratic cost,
-            ``q`` the linear cost, ``A`` the constraint matrix, and
-            ``b`` the right-hand side.
-
-        Notes
-        -----
-        Variables: :math:`x = [c \;;\; t] \in \mathbb{R}^{m+1}`.
-
-        Constraint layout (rows of ``A``):
-
-        .. code-block:: text
-
-            rows  0..n    SOC_{n+1}:  [t ; L^T A^T c]
-            rows n+1..n+m  Nonneg_m:  c >= 0
-            row  n+m+1     Nonneg_1:  sum(c) <= 1
-        """
-        A_mat = self._game.A  # (m, n)
-        beta_hat = self._region.beta_hat  # (n,)
-        Sigma = self._region.Sigma  # (n, n)
-        m, n = A_mat.shape
-
-        L = np.linalg.cholesky(Sigma)  # Sigma = L L^T
-        LT_AT = L.T @ A_mat.T  # (n, m)
-
-        # Quadratic term: none.
-        P = sp.csc_matrix((m + 1, m + 1))
-
-        # Linear cost: minimize -c^T A beta_hat + t.
-        q = np.empty(m + 1)
-        q[:m] = -(A_mat @ beta_hat)
-        q[m] = 1.0
-
-        # SOC block ─────────────────────────────────────────────────────
-        # row 0:    [0 … 0  -1]   (scalar t component)
-        # rows 1..n: [-L^T A^T  0]  (vector component)
-        soc_row0 = sp.hstack(
-            [sp.csc_matrix((1, m)), sp.csc_matrix([[-1.0]])],
-            format="csc",
-        )
-        soc_body = sp.hstack(
-            [sp.csc_matrix(-LT_AT), sp.csc_matrix((n, 1))],
-            format="csc",
-        )
-        A_soc = sp.vstack([soc_row0, soc_body], format="csc")  # (n+1) x (m+1)
-
-        # Non-negativity block: [-I_m  0] ──────────────────────────────
-        A_nn = sp.hstack(
-            [-sp.eye(m, format="csc"), sp.csc_matrix((m, 1))],
-            format="csc",
-        )  # m x (m+1)
-
-        # Budget block: [1 … 1  0] ─────────────────────────────────────
-        ones_row = sp.csc_matrix(
-            (np.ones(m), (np.zeros(m, dtype=int), np.arange(m))),
-            shape=(1, m),
-        )
-        A_bud = sp.hstack(
-            [ones_row, sp.csc_matrix((1, 1))],
-            format="csc",
-        )  # 1 x (m+1)
-
-        A_total = sp.vstack([A_soc, A_nn, A_bud], format="csc")
-        b_total = np.zeros(n + 1 + m + 1)
-        b_total[-1] = 1.0  # budget RHS
-
-        return P, q, A_total, b_total
+        """Assemble the Clarabel SOCP matrices; delegates to the module helper."""
+        return _build_markowitz_base_socp(self._game, self._region)
 
     def solve(
         self,
@@ -520,10 +526,146 @@ class MarkowitzSolver(DualSolver):
 
         P, q, A_total, b_total = self._build_socp()
 
-        cones: list[clarabel.SupportedConeT] = [
+        cones: list[object] = [
             clarabel.SecondOrderConeT(n + 1),
             clarabel.NonnegativeConeT(m + 1),
         ]
+
+        settings = clarabel.DefaultSettings()
+        settings.verbose = False
+
+        solver = clarabel.DefaultSolver(P, q, A_total, b_total, cones, settings)
+        solution = solver.solve()
+
+        c_star = self._space.project(np.array(solution.x[:m]))
+        converged = solution.status in (
+            clarabel.SolverStatus.Solved,
+            clarabel.SolverStatus.AlmostSolved,
+        )
+
+        return SolverResult(
+            x=c_star,
+            objective=self._objective.evaluate(c_star),
+            n_iterations=solution.iterations,
+            converged=converged,
+        )
+
+
+class ConstrainedMarkowitzSolver(DualSolver):
+    r"""Exact SOCP solver for the Markowitz problem with robust constraints.
+
+    Maximizes
+
+    .. math::
+
+        f(c) = c^\top A \hat\beta - \bigl\| \Sigma^{1/2} A^\top c \bigr\|_2
+
+    over :math:`C = \{c \ge 0,\, \sum_i c_i \le 1\}` subject to a list of
+    robust constraints
+
+    .. math::
+
+        q_k(c) = c^\top B_k \hat\gamma_k
+                 - \bigl\| \Sigma_{T_k}^{1/2} B_k^\top c \bigr\|_2
+                 \ge 0, \quad k = 1, \ldots, K.
+
+    Each constraint contributes one additional
+    :class:`clarabel.SecondOrderConeT` block to the SOCP solved by
+    Clarabel's interior-point method.
+
+    Parameters
+    ----------
+    game : MatrixGame
+        Bilinear outcome model with payoff matrix ``A``, shape ``(m, n)``.
+    region : Ellipsoid
+        Ellipsoidal uncertainty set for the objective parameter ``beta``.
+    space : AllocationDecision
+        Feasible set for the decision ``c``.
+    constraints : list[MatrixGameEllipsoidRobustConstraint]
+        Robust constraints, each with ``dim_c == game.dim_c``.
+    """
+
+    def __init__(
+        self,
+        game: MatrixGame,
+        region: Ellipsoid,
+        space: AllocationDecision,
+        constraints: list[MatrixGameEllipsoidRobustConstraint],
+    ) -> None:
+        if game.dim_c != space.dim:
+            raise ValueError(
+                f"game.dim_c ({game.dim_c}) must equal space.dim ({space.dim})"
+            )
+        if game.dim_beta != region.dim:
+            raise ValueError(
+                f"game.dim_beta ({game.dim_beta}) must equal "
+                f"region.dim ({region.dim})"
+            )
+        for rc in constraints:
+            if rc.dim_c != game.dim_c:
+                raise ValueError(
+                    f"constraint dim_c ({rc.dim_c}) must equal "
+                    f"game.dim_c ({game.dim_c})"
+                )
+        self._game = game
+        self._region = region
+        self._space = space
+        self._constraints = constraints
+        self._objective = MatrixGameEllipsoidDualObjective(game, region)
+
+    def _build_socp(
+        self,
+    ) -> tuple[
+        sp.csc_matrix,
+        npt.NDArray[np.float64],
+        sp.csc_matrix,
+        npt.NDArray[np.float64],
+        list[object],
+    ]:
+        """Assemble SOCP matrices including all robust constraint blocks."""
+        m = self._game.dim_c
+        n = self._game.dim_beta
+
+        P, q, A_base, b_base = _build_markowitz_base_socp(
+            self._game, self._region
+        )
+        cones: list[object] = [
+            clarabel.SecondOrderConeT(n + 1),
+            clarabel.NonnegativeConeT(m + 1),
+        ]
+
+        A_blocks = [A_base]
+        b_parts = [b_base]
+        for rc in self._constraints:
+            A_block, cone_size = rc.socp_block(m)
+            A_blocks.append(A_block)
+            b_parts.append(np.zeros(cone_size))
+            cones.append(clarabel.SecondOrderConeT(cone_size))
+
+        A_total = sp.vstack(A_blocks, format="csc")
+        b_total = np.concatenate(b_parts)
+        return P, q, A_total, b_total, cones
+
+    def solve(
+        self,
+        c0: npt.NDArray[np.float64],
+    ) -> SolverResult:
+        r"""Solve the constrained SOCP to global optimality via Clarabel.
+
+        Parameters
+        ----------
+        c0 : npt.NDArray[np.float64]
+            Ignored; provided for API compatibility.
+
+        Returns
+        -------
+        SolverResult
+            Optimal decision ``c*``, objective value ``f(c*)``,
+            interior-point iteration count, and convergence flag.
+        """
+        m = self._game.dim_c
+
+        P, q, A_total, b_total, cones = self._build_socp()
 
         settings = clarabel.DefaultSettings()
         settings.verbose = False

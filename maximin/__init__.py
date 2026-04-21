@@ -22,8 +22,13 @@ from maximin.problem_objectives import (
     MatrixGameEllipsoidDualObjective,
     PrimalObjective,
 )
+from maximin.robust_constraints import (
+    MatrixGameEllipsoidRobustConstraint,
+    RobustConstraint,
+)
 from maximin.solvers import (
     AcceleratedProximalGradientDualSolver,
+    ConstrainedMarkowitzSolver,
     DualSolver,
     MarkowitzSolver,
     MaximinLinearSolver,
@@ -40,6 +45,7 @@ __all__ = [
     "CobbDouglas",
     "CobbDouglasEllipsoidDualObjective",
     "ConfidenceRegion",
+    "ConstrainedMarkowitzSolver",
     "CriterionRegion",
     "DecisionSpace",
     "DefaultDualObjective",
@@ -54,6 +60,7 @@ __all__ = [
     "MarkowitzSolver",
     "MatrixGame",
     "MatrixGameEllipsoidDualObjective",
+    "MatrixGameEllipsoidRobustConstraint",
     "MaximinLinearSolver",
     "OutcomeModel",
     "PoissonRegion",
@@ -61,5 +68,6 @@ __all__ = [
     "PrimalSolver",
     "ProximalSubgradientDualSolver",
     "ProximalSubgradientPrimalSolver",
+    "RobustConstraint",
     "SolverResult",
 ]
