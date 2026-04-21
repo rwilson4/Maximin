@@ -1,7 +1,15 @@
 # pyre-strict
 """Robust optimization: maximize worst-case objective over an uncertainty set."""
 
-from maximin.confidence_regions import ConfidenceRegion, Ellipsoid, Hypercube
+from maximin.confidence_regions import (
+    BinomialRegion,
+    ConfidenceRegion,
+    Ellipsoid,
+    GammaRegion,
+    Hypercube,
+    LogConcaveLikelihoodRegion,
+    PoissonRegion,
+)
 from maximin.decision_spaces import AllocationDecision, DecisionSpace
 from maximin.outcome_models import CobbDouglas, MatrixGame, OutcomeModel
 from maximin.problem_objectives import (
@@ -26,6 +34,7 @@ from maximin.solvers import (
 __all__ = [
     "AcceleratedProximalGradientDualSolver",
     "AllocationDecision",
+    "BinomialRegion",
     "CobbDouglas",
     "CobbDouglasEllipsoidDualObjective",
     "ConfidenceRegion",
@@ -35,12 +44,15 @@ __all__ = [
     "DualObjective",
     "DualSolver",
     "Ellipsoid",
+    "GammaRegion",
     "Hypercube",
+    "LogConcaveLikelihoodRegion",
     "MarkowitzSolver",
     "MatrixGame",
     "MatrixGameEllipsoidDualObjective",
     "MaximinLinearSolver",
     "OutcomeModel",
+    "PoissonRegion",
     "PrimalObjective",
     "PrimalSolver",
     "ProximalSubgradientDualSolver",
