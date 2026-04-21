@@ -285,20 +285,29 @@ class AcceleratedProximalGradientDualSolver(DualSolver):
     :math:`\nabla_c f(c) = \nabla_c g(c;\beta^*(c))`, which the objective's
     ``grad_c`` method should return.
 
-    Iterates the FISTA rule (Beck & Teboulle, 2009):
+    Iterates the FISTA rule (Beck & Teboulle, 2009) with the backtracking
+    line search of Parikh & Boyd, *Proximal Algorithms* §4.3:
 
     .. math::
 
-        c_{k+1} &= \Pi_C\!\bigl(y_k + \alpha\,\nabla f(y_k)\bigr), \\
+        c_{k+1} &= \Pi_C\!\bigl(y_k + \alpha_k\,\nabla f(y_k)\bigr), \\
         t_{k+1} &= \tfrac{1 + \sqrt{1 + 4t_k^2}}{2}, \\
         y_{k+1} &= c_{k+1} + \tfrac{t_k - 1}{t_{k+1}}\,
-                   (c_{k+1} - c_k),
+                   (c_{k+1} - c_k).
 
-    with constant step size :math:`\alpha \le 1/L` where :math:`L` is the
-    Lipschitz constant of :math:`\nabla f`. Convergence is
-    :math:`O(1/k^2)`, faster than the :math:`O(1/\sqrt{k})` rate of
-    projected subgradient. The best iterate (highest :math:`f` value seen)
-    is returned to guard against non-monotone steps caused by momentum.
+    At each iteration :math:`\alpha_k` is found by starting from the
+    previous accepted step size and dividing by ``backtrack_factor`` until
+    the sufficient-increase condition
+
+    .. math::
+
+        f(c_{k+1}) \ge f(y_k) + \nabla f(y_k)^\top(c_{k+1} - y_k)
+                      - \tfrac{\|c_{k+1} - y_k\|^2}{2\alpha_k}
+
+    holds. Convergence is :math:`O(1/k^2)`, faster than the
+    :math:`O(1/\sqrt{k})` rate of projected subgradient. The best iterate
+    (highest :math:`f` value seen) is returned to guard against non-monotone
+    steps caused by momentum.
 
     Parameters
     ----------
@@ -312,8 +321,15 @@ class AcceleratedProximalGradientDualSolver(DualSolver):
     tol : float
         Convergence tolerance on the iterate-change norm.
     step_size : float
-        Constant step size :math:`\alpha`. Must satisfy
-        :math:`\alpha \le 1/L`; too large a value causes divergence.
+        Initial step size :math:`\alpha_0`.  With backtracking this is an
+        upper-bound estimate; the algorithm will shrink it automatically.
+        Without backtracking (``backtrack_factor=None``) it is used as a
+        constant and must satisfy :math:`\alpha \le 1/L`.
+    backtrack_factor : float or None
+        Expansion factor :math:`\eta > 1` for the Lipschitz estimate used
+        in the §4.3 backtracking rule (the step size is divided by this
+        value on each failed trial).  ``None`` disables backtracking and
+        uses ``step_size`` as a constant.
     """
 
     def __init__(
@@ -323,12 +339,14 @@ class AcceleratedProximalGradientDualSolver(DualSolver):
         max_iter: int = 1_000,
         tol: float = 1e-6,
         step_size: float = 1e-2,
+        backtrack_factor: float | None = 2.0,
     ) -> None:
         self._objective = objective
         self._space = space
         self._max_iter = max_iter
         self._tol = tol
         self._step_size = step_size
+        self._backtrack_factor = backtrack_factor
 
     def solve(
         self,
@@ -345,6 +363,7 @@ class AcceleratedProximalGradientDualSolver(DualSolver):
             max_iter=self._max_iter,
             tol=self._tol,
             minimize=False,
+            backtrack_factor=self._backtrack_factor,
         )
         return SolverResult(
             x=best_c,

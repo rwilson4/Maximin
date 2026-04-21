@@ -208,6 +208,34 @@ class TestAcceleratedProximalGradientDualSolver:
         result = solver.solve(c0)
         assert result.objective >= initial_obj - 1e-12
 
+    @staticmethod
+    def test_backtracking_with_large_step_size() -> None:
+        r"""Backtracking must rescue a step size that would otherwise diverge.
+
+        step_size=100.0 far exceeds 1/L; without backtracking the iterates
+        diverge.  With backtracking (backtrack_factor=2.0, the default) the
+        solver must still reach within 1e-3 of the SOCP optimum.
+        """
+        np.random.seed(42)
+        m, n = 10, 5
+        A = np.random.randn(m, n)
+        beta_hat = np.random.randn(n)
+        R = np.random.randn(n, n)
+        Sigma = R.T @ R + np.eye(n)
+        game = MatrixGame(A)
+        region = Ellipsoid(beta_hat, Sigma)
+        space = AllocationDecision(m)
+        obj = MatrixGameEllipsoidDualObjective(game, region)
+
+        c0 = np.ones(m) / m
+        socp_result = MarkowitzSolver(game, region, space).solve(c0)
+        apg_result = AcceleratedProximalGradientDualSolver(
+            obj, space, max_iter=5_000, step_size=100.0, backtrack_factor=2.0
+        ).solve(c0)
+
+        assert space.contains(apg_result.x), "APG result not feasible"
+        assert socp_result.objective >= apg_result.objective - 1e-3
+
 
 @pytest.mark.parametrize(
     "seed,m,n",
