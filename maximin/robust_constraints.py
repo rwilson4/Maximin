@@ -52,9 +52,7 @@ class RobustConstraint(ABC):
         """
 
     @abstractmethod
-    def worst_case_gamma(
-        self, c: npt.NDArray[np.float64]
-    ) -> npt.NDArray[np.float64]:
+    def worst_case_gamma(self, c: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
         r"""Return :math:`\gamma^*(c) = \arg\min_{\gamma \in T} r(c;\, \gamma)`.
 
         Parameters
@@ -68,9 +66,7 @@ class RobustConstraint(ABC):
             Worst-case parameter, shape ``(p,)``.
         """
 
-    def is_satisfied(
-        self, c: npt.NDArray[np.float64], atol: float = 0.0
-    ) -> bool:
+    def is_satisfied(self, c: npt.NDArray[np.float64], atol: float = 0.0) -> bool:
         """Return ``True`` if :math:`q(c) \\ge -\\text{atol}`.
 
         Parameters
@@ -137,9 +133,7 @@ class MatrixGameEllipsoidRobustConstraint(RobustConstraint):
             raise ValueError(f"B must be a 2-D array, got ndim={B.ndim}")
         m, p = B.shape
         if p != region.dim:
-            raise ValueError(
-                f"B must have shape (m, {region.dim}), got {B.shape}"
-            )
+            raise ValueError(f"B must have shape (m, {region.dim}), got {B.shape}")
         self._B = B.copy()
         self._region = region
         self._m = m
@@ -174,9 +168,7 @@ class MatrixGameEllipsoidRobustConstraint(RobustConstraint):
         _, _, norm = self._at_c_quantities(c)
         return float(np.dot(c, self._B_gamma_hat)) - norm
 
-    def worst_case_gamma(
-        self, c: npt.NDArray[np.float64]
-    ) -> npt.NDArray[np.float64]:
+    def worst_case_gamma(self, c: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
         r"""Return :math:`\gamma^*(c) = \hat\gamma - \Sigma_T B^\top c \,/\, \|\Sigma_T^{1/2} B^\top c\|`."""
         gamma_hat = self._region.beta_hat
         _, Sigma_T_BT_c, norm = self._at_c_quantities(c)
@@ -211,9 +203,7 @@ class MatrixGameEllipsoidRobustConstraint(RobustConstraint):
             Size of the second-order cone, ``p+1``.
         """
         if m != self._m:
-            raise ValueError(
-                f"m={m} does not match constraint dim_c={self._m}"
-            )
+            raise ValueError(f"m={m} does not match constraint dim_c={self._m}")
         p = self._p
 
         # Row 0: scalar SOC component.

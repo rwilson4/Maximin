@@ -626,9 +626,7 @@ class ConstrainedMarkowitzSolver(DualSolver):
         m = self._game.dim_c
         n = self._game.dim_beta
 
-        P, q, A_base, b_base = _build_markowitz_base_socp(
-            self._game, self._region
-        )
+        P, q, A_base, b_base = _build_markowitz_base_socp(self._game, self._region)
         cones: list[object] = [
             clarabel.SecondOrderConeT(n + 1),
             clarabel.NonnegativeConeT(m + 1),

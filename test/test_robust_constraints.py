@@ -48,9 +48,7 @@ class TestMatrixGameEllipsoidRobustConstraint:
             np.array([0.5, 0.5, 0.0]),
         ],
     )
-    def test_worst_case_gamma_in_ellipsoid(
-        self, c: np.ndarray
-    ) -> None:
+    def test_worst_case_gamma_in_ellipsoid(self, c: np.ndarray) -> None:
         rc = _identity_constraint()
         region = Ellipsoid(np.zeros(3), np.eye(3))
         gamma_star = rc.worst_case_gamma(c)
@@ -60,9 +58,7 @@ class TestMatrixGameEllipsoidRobustConstraint:
         "c",
         [np.array([0.3, 0.5, 0.2]), np.array([0.6, 0.4, 0.0])],
     )
-    def test_infimum_equals_r_at_worst_case_gamma(
-        self, c: np.ndarray
-    ) -> None:
+    def test_infimum_equals_r_at_worst_case_gamma(self, c: np.ndarray) -> None:
         B = np.eye(3)
         rc = _identity_constraint()
         gamma_star = rc.worst_case_gamma(c)
@@ -153,13 +149,9 @@ class TestConstrainedMarkowitzSolver:
         game, region, space = _base_problem(0)
         c0 = np.zeros(3)
         unconstrained = MarkowitzSolver(game, region, space).solve(c0)
-        constrained = ConstrainedMarkowitzSolver(
-            game, region, space, []
-        ).solve(c0)
+        constrained = ConstrainedMarkowitzSolver(game, region, space, []).solve(c0)
         assert constrained.converged
-        np.testing.assert_allclose(
-            constrained.x, unconstrained.x, atol=1e-5
-        )
+        np.testing.assert_allclose(constrained.x, unconstrained.x, atol=1e-5)
         assert pytest.approx(constrained.objective, abs=1e-5) == unconstrained.objective
 
     def test_trivially_satisfied_constraint_matches_unconstrained(
@@ -179,9 +171,7 @@ class TestConstrainedMarkowitzSolver:
             game, region, space, [constraint]
         ).solve(c0)
         assert constrained.converged
-        np.testing.assert_allclose(
-            constrained.x, unconstrained.x, atol=1e-4
-        )
+        np.testing.assert_allclose(constrained.x, unconstrained.x, atol=1e-4)
 
     def test_binding_constraint_yields_lower_objective(self) -> None:
         # Objective: maximize c[0] - 0.1*||c||  (beta_hat=[1,0], A=I, small Sigma)
@@ -213,9 +203,9 @@ class TestConstrainedMarkowitzSolver:
         constraint = MatrixGameEllipsoidRobustConstraint(
             B, Ellipsoid(np.array([0.0]), 1e-6 * np.eye(1))
         )
-        result = ConstrainedMarkowitzSolver(
-            game, region, space, [constraint]
-        ).solve(np.zeros(2))
+        result = ConstrainedMarkowitzSolver(game, region, space, [constraint]).solve(
+            np.zeros(2)
+        )
         assert result.x[0] < 1e-3
         assert result.objective < 0.01
 
@@ -230,9 +220,9 @@ class TestConstrainedMarkowitzSolver:
         c2 = MatrixGameEllipsoidRobustConstraint(
             B, Ellipsoid(np.array([1.0, 0.0]), 0.01 * np.eye(2))
         )
-        result = ConstrainedMarkowitzSolver(
-            game, region, space, [c1, c2]
-        ).solve(np.zeros(2))
+        result = ConstrainedMarkowitzSolver(game, region, space, [c1, c2]).solve(
+            np.zeros(2)
+        )
         assert result.converged
         assert c1.is_satisfied(result.x, atol=1e-6)
         assert c2.is_satisfied(result.x, atol=1e-6)
@@ -269,9 +259,9 @@ class TestConstrainedMarkowitzSolver:
             B, Ellipsoid(gamma_hat, Sigma_T)
         )
 
-        result = ConstrainedMarkowitzSolver(
-            game, region, space, [constraint]
-        ).solve(np.zeros(m))
+        result = ConstrainedMarkowitzSolver(game, region, space, [constraint]).solve(
+            np.zeros(m)
+        )
 
         if result.converged:
             assert space.contains(result.x)
