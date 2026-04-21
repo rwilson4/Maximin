@@ -3,8 +3,15 @@
 
 import numpy as np
 import pytest
+from scipy.stats import chi2
 
-from maximin.confidence_regions import Ellipsoid, Hypercube
+from maximin.confidence_regions import (
+    BinomialRegion,
+    Ellipsoid,
+    GammaRegion,
+    Hypercube,
+    PoissonRegion,
+)
 
 
 class TestEllipsoid:
@@ -290,3 +297,318 @@ def test_hypercube_project_idempotent(seed: int, n: int) -> None:
         beta = np.random.randn(n) * 5.0
         proj = region.project(beta)
         np.testing.assert_allclose(region.project(proj), proj, atol=1e-15)
+
+
+# ---------------------------------------------------------------------------
+# BinomialRegion
+# ---------------------------------------------------------------------------
+
+
+class TestBinomialRegion:
+    """Tests for BinomialRegion."""
+
+    @staticmethod
+    def _make(m: int = 1) -> "BinomialRegion":
+        n = np.full(m, 100.0)
+        k = np.full(m, 50.0)
+        threshold = float(chi2.ppf(0.95, df=m))
+        return BinomialRegion(n, k, threshold)
+
+    def test_mle_is_inside(self) -> None:
+        region = self._make(m=2)
+        assert region.contains(region.beta_hat)
+
+    def test_known_outside(self) -> None:
+        region = self._make(m=1)
+        # LRT at p=0.1 ≫ threshold for n=100, k=50.
+        assert not region.contains(np.array([0.1]))
+
+    def test_known_inside(self) -> None:
+        # n=100, k=50, threshold=chi2(0.95,1)≈3.84.  LRT at p=0.41 ≈ 3.29 < 3.84.
+        region = self._make(m=1)
+        assert region.contains(np.array([0.41]))
+
+    def test_known_outside_near_boundary(self) -> None:
+        # LRT at p=0.40 ≈ 4.08 > 3.84.
+        region = self._make(m=1)
+        assert not region.contains(np.array([0.40]))
+
+    def test_project_inside_unchanged(self) -> None:
+        region = self._make(m=1)
+        beta = np.array([0.45])
+        np.testing.assert_allclose(region.project(beta), beta)
+
+    def test_project_outside_feasible(self) -> None:
+        region = self._make(m=2)
+        outside = np.array([0.1, 0.9])
+        assert region.contains(region.project(outside))
+
+    def test_project_outside_on_boundary(self) -> None:
+        region = self._make(m=1)
+        outside = np.array([0.1])
+        proj = region.project(outside)
+        lrt = region._lrt(proj)
+        assert pytest.approx(lrt, abs=1e-4) == region._threshold
+
+    def test_project_idempotent(self) -> None:
+        region = self._make(m=2)
+        outside = np.array([0.05, 0.95])
+        proj = region.project(outside)
+        np.testing.assert_allclose(region.project(proj), proj, atol=1e-6)
+
+    def test_dim(self) -> None:
+        assert self._make(m=3).dim == 3
+
+    def test_beta_hat_returns_copy(self) -> None:
+        region = self._make(m=2)
+        bh = region.beta_hat
+        bh[0] = 999.0
+        assert region.beta_hat[0] != 999.0
+
+    def test_invalid_n_not_positive(self) -> None:
+        with pytest.raises(ValueError, match="positive"):
+            BinomialRegion(np.array([0.0]), np.array([0.0]), 3.84)
+
+    def test_invalid_k_out_of_range(self) -> None:
+        with pytest.raises(ValueError, match="0 <= k"):
+            BinomialRegion(np.array([10.0]), np.array([11.0]), 3.84)
+
+    def test_invalid_k_negative(self) -> None:
+        with pytest.raises(ValueError, match="0 <= k"):
+            BinomialRegion(np.array([10.0]), np.array([-1.0]), 3.84)
+
+    def test_invalid_shape_mismatch(self) -> None:
+        with pytest.raises(ValueError, match="shape"):
+            BinomialRegion(np.array([10.0, 10.0]), np.array([5.0]), 3.84)
+
+    def test_invalid_n_not_1d(self) -> None:
+        with pytest.raises(ValueError, match="1-dimensional"):
+            BinomialRegion(np.ones((2, 2)), np.ones((2, 2)), 3.84)
+
+    def test_edge_k_zero(self) -> None:
+        """k=0 (MLE on boundary) should not raise."""
+        region = BinomialRegion(np.array([20.0]), np.array([0.0]), 3.84)
+        assert region.contains(region.beta_hat, atol=1e-6)
+
+    def test_joint_region_not_product(self) -> None:
+        """A point on the boundary of each marginal may be outside the joint region."""
+        # For m=2, the joint threshold (chi2(0.95,2)≈5.99) is larger than
+        # each marginal (chi2(0.95,1)≈3.84), so the joint region is larger
+        # along the diagonal.  A point at the marginal boundary along one axis
+        # while the other component is at the MLE is strictly inside the joint region.
+        n = np.array([100.0, 100.0])
+        k = np.array([50.0, 50.0])
+        t_joint = float(chi2.ppf(0.95, df=2))
+        region = BinomialRegion(n, k, t_joint)
+        # p=[0.40, 0.50]: 0.40 is just outside the 1-d marginal boundary,
+        # but its LRT contribution is only ~4.08, well below t_joint≈5.99.
+        assert region.contains(np.array([0.40, 0.50]))
+
+
+# ---------------------------------------------------------------------------
+# PoissonRegion
+# ---------------------------------------------------------------------------
+
+
+class TestPoissonRegion:
+    """Tests for PoissonRegion."""
+
+    @staticmethod
+    def _make(m: int = 1) -> "PoissonRegion":
+        n = np.full(m, 50.0)
+        x_sum = np.full(m, 100.0)  # MLE = 2.0 per component
+        threshold = float(chi2.ppf(0.95, df=m))
+        return PoissonRegion(n, x_sum, threshold)
+
+    def test_mle_is_inside(self) -> None:
+        region = self._make(m=2)
+        assert region.contains(region.beta_hat)
+
+    def test_known_outside(self) -> None:
+        # LRT at lambda=10 is large.
+        region = self._make(m=1)
+        assert not region.contains(np.array([10.0]))
+
+    def test_known_inside(self) -> None:
+        # MLE = 2.0; a nearby value should be inside.
+        region = self._make(m=1)
+        assert region.contains(np.array([2.1]))
+
+    def test_project_inside_unchanged(self) -> None:
+        region = self._make(m=1)
+        beta = np.array([2.05])
+        np.testing.assert_allclose(region.project(beta), beta)
+
+    def test_project_outside_feasible(self) -> None:
+        region = self._make(m=2)
+        outside = np.array([0.01, 20.0])
+        assert region.contains(region.project(outside))
+
+    def test_project_outside_on_boundary(self) -> None:
+        region = self._make(m=1)
+        outside = np.array([10.0])
+        proj = region.project(outside)
+        lrt = region._lrt(proj)
+        assert pytest.approx(lrt, abs=1e-4) == region._threshold
+
+    def test_project_idempotent(self) -> None:
+        region = self._make(m=2)
+        outside = np.array([0.01, 20.0])
+        proj = region.project(outside)
+        np.testing.assert_allclose(region.project(proj), proj, atol=1e-6)
+
+    def test_dim(self) -> None:
+        assert self._make(m=4).dim == 4
+
+    def test_invalid_n_not_positive(self) -> None:
+        with pytest.raises(ValueError, match="positive"):
+            PoissonRegion(np.array([0.0]), np.array([5.0]), 3.84)
+
+    def test_invalid_x_sum_negative(self) -> None:
+        with pytest.raises(ValueError, match="non-negative"):
+            PoissonRegion(np.array([10.0]), np.array([-1.0]), 3.84)
+
+    def test_invalid_shape_mismatch(self) -> None:
+        with pytest.raises(ValueError, match="shape"):
+            PoissonRegion(np.array([10.0, 10.0]), np.array([5.0]), 3.84)
+
+    def test_edge_x_sum_zero(self) -> None:
+        """x_sum=0 (MLE=0, boundary) should not raise."""
+        region = PoissonRegion(np.array([10.0]), np.array([0.0]), 3.84)
+        assert region.contains(region.beta_hat, atol=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# GammaRegion
+# ---------------------------------------------------------------------------
+
+
+class TestGammaRegion:
+    """Tests for GammaRegion."""
+
+    @staticmethod
+    def _make(m: int = 1) -> "GammaRegion":
+        alpha = np.full(m, 2.0)
+        n = np.full(m, 30.0)
+        x_sum = np.full(m, 60.0)  # MLE = n*alpha/x_sum = 1.0 per component
+        threshold = float(chi2.ppf(0.95, df=m))
+        return GammaRegion(alpha, n, x_sum, threshold)
+
+    def test_mle_is_inside(self) -> None:
+        region = self._make(m=2)
+        assert region.contains(region.beta_hat)
+
+    def test_known_outside(self) -> None:
+        region = self._make(m=1)
+        assert not region.contains(np.array([10.0]))
+
+    def test_project_inside_unchanged(self) -> None:
+        region = self._make(m=1)
+        beta = np.array([1.05])
+        np.testing.assert_allclose(region.project(beta), beta)
+
+    def test_project_outside_feasible(self) -> None:
+        region = self._make(m=2)
+        outside = np.array([0.01, 10.0])
+        assert region.contains(region.project(outside))
+
+    def test_project_outside_on_boundary(self) -> None:
+        region = self._make(m=1)
+        outside = np.array([10.0])
+        proj = region.project(outside)
+        lrt = region._lrt(proj)
+        assert pytest.approx(lrt, abs=1e-4) == region._threshold
+
+    def test_project_idempotent(self) -> None:
+        region = self._make(m=2)
+        outside = np.array([0.01, 10.0])
+        proj = region.project(outside)
+        np.testing.assert_allclose(region.project(proj), proj, atol=1e-6)
+
+    def test_dim(self) -> None:
+        assert self._make(m=3).dim == 3
+
+    def test_invalid_alpha_not_positive(self) -> None:
+        with pytest.raises(ValueError, match="positive"):
+            GammaRegion(np.array([0.0]), np.array([10.0]), np.array([5.0]), 3.84)
+
+    def test_invalid_x_sum_not_positive(self) -> None:
+        with pytest.raises(ValueError, match="positive"):
+            GammaRegion(np.array([2.0]), np.array([10.0]), np.array([0.0]), 3.84)
+
+    def test_invalid_shape_mismatch(self) -> None:
+        with pytest.raises(ValueError, match="shape"):
+            GammaRegion(np.array([2.0, 2.0]), np.array([10.0]), np.array([5.0]), 3.84)
+
+
+# ---------------------------------------------------------------------------
+# Parametric tests for all three LR region classes
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "seed,m",
+    [(100, 1), (200, 2), (300, 3)],
+)
+def test_binomial_project_always_feasible(seed: int, m: int) -> None:
+    """BinomialRegion.project always yields a point in S."""
+    rng = np.random.default_rng(seed)
+    n = rng.integers(20, 100, size=m).astype(float)
+    k = np.array([rng.integers(0, int(ni) + 1) for ni in n], dtype=float)
+    threshold = float(chi2.ppf(0.95, df=m))
+    region = BinomialRegion(n, k, threshold)
+    for _ in range(15):
+        beta = rng.uniform(0.05, 0.95, size=m)
+        assert region.contains(region.project(beta)), "projection not feasible"
+
+
+@pytest.mark.parametrize(
+    "seed,m",
+    [(101, 1), (201, 2), (301, 3)],
+)
+def test_binomial_project_idempotent(seed: int, m: int) -> None:
+    """BinomialRegion.project is idempotent."""
+    rng = np.random.default_rng(seed)
+    n = rng.integers(20, 100, size=m).astype(float)
+    k = np.array([rng.integers(1, int(ni)) for ni in n], dtype=float)
+    threshold = float(chi2.ppf(0.95, df=m))
+    region = BinomialRegion(n, k, threshold)
+    for _ in range(10):
+        beta = rng.uniform(0.05, 0.95, size=m)
+        proj = region.project(beta)
+        np.testing.assert_allclose(
+            region.project(proj), proj, atol=1e-6, err_msg="not idempotent"
+        )
+
+
+@pytest.mark.parametrize(
+    "seed,m",
+    [(102, 1), (202, 2)],
+)
+def test_poisson_project_always_feasible(seed: int, m: int) -> None:
+    """PoissonRegion.project always yields a point in S."""
+    rng = np.random.default_rng(seed)
+    n = rng.integers(10, 50, size=m).astype(float)
+    x_sum = n * rng.uniform(0.5, 5.0, size=m)
+    threshold = float(chi2.ppf(0.95, df=m))
+    region = PoissonRegion(n, x_sum, threshold)
+    for _ in range(15):
+        beta = rng.uniform(0.1, 10.0, size=m)
+        assert region.contains(region.project(beta)), "projection not feasible"
+
+
+@pytest.mark.parametrize(
+    "seed,m",
+    [(103, 1), (203, 2)],
+)
+def test_gamma_project_always_feasible(seed: int, m: int) -> None:
+    """GammaRegion.project always yields a point in S."""
+    rng = np.random.default_rng(seed)
+    alpha = rng.uniform(0.5, 3.0, size=m)
+    n = rng.integers(10, 50, size=m).astype(float)
+    x_sum = n * alpha / rng.uniform(0.5, 3.0, size=m)
+    threshold = float(chi2.ppf(0.95, df=m))
+    region = GammaRegion(alpha, n, x_sum, threshold)
+    for _ in range(15):
+        beta = rng.uniform(0.1, 5.0, size=m)
+        assert region.contains(region.project(beta)), "projection not feasible"
