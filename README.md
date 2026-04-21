@@ -8,12 +8,17 @@ Robust optimization solver for maximin problems of the form:
 maximize_c  minimize_beta  g(c; beta)
 subject to  beta in S
             c in C
+            r_k(c; gamma_k) >= 0  for all gamma_k in T_k,  k = 1, ..., K
 ```
 
 `c` is a decision variable (what you control), `beta` is an uncertain parameter
 known only to lie in an uncertainty set `S`, and `C` is the feasible set for
-decisions. The library returns a decision `c` that maximizes the **worst-case**
-outcome over all `beta` in `S`.
+decisions. The optional **robust constraints** `r_k(c; gamma_k) >= 0` must hold
+for every `gamma_k` in a second uncertainty set `T_k`, independently of the
+objective uncertainty.
+
+The library returns a decision `c` that maximizes the **worst-case** outcome
+over all `beta` in `S`, subject to the constraints holding robustly.
 
 ## Why maximin?
 
@@ -28,6 +33,9 @@ distributional uncertainty:
   parameter estimation error.
 - **Zero-sum games**: find the optimal strategy in a matrix game where an
   adversary picks the worst-case response.
+- **Robust feasibility constraints**: require `r(c; gamma) >= 0` for all
+  `gamma` in a confidence set — for example, guaranteeing that a capacity or
+  budget constraint holds even under adverse parameter realizations.
 
 ### How does it compare with other tools?
 
@@ -90,6 +98,55 @@ print(result)
 `result.objective` is the guaranteed worst-case payoff: regardless of which
 `beta` in the ellipsoid nature selects, you earn at least that value.
 `result.x` is the optimal allocation.
+
+### Matrix game with ellipsoidal uncertainty and robust constraints
+
+Robust constraints require a side condition `r(c; gamma) >= 0` to hold for
+**every** `gamma` in a second uncertainty set `T`, independently of the
+objective uncertainty. For a matrix game constraint `r(c; gamma) = c^T B gamma`
+and an ellipsoidal `T`, the worst case over `T` has a closed form and the
+combined problem remains an SOCP:
+
+```python
+import numpy as np
+from maximin import (
+    AllocationDecision,
+    ConstrainedMarkowitzSolver,
+    Ellipsoid,
+    MatrixGame,
+    MatrixGameEllipsoidRobustConstraint,
+)
+
+# Objective: maximize worst-case c^T A beta over S
+A = np.array([[1.0, 0.5],
+              [0.3, 0.8],
+              [0.6, 0.6]])
+game = MatrixGame(A)
+region = Ellipsoid(np.array([1.0, 1.0]), 0.01 * np.eye(2))   # S for beta
+space = AllocationDecision(3)
+
+# Constraint: c^T B gamma >= 0 for all gamma in T
+# e.g., a robustified lower bound on a secondary payoff
+B = np.array([[0.5, 0.2],
+              [0.1, 0.6],
+              [0.4, 0.4]])
+T = Ellipsoid(np.array([0.3, 0.3]), 0.02 * np.eye(2))        # T for gamma
+constraint = MatrixGameEllipsoidRobustConstraint(B, T)
+
+result = ConstrainedMarkowitzSolver(
+    game, region, space, [constraint]
+).solve(np.zeros(3))
+print(result)
+
+# Verify constraint is satisfied at the optimum
+print(constraint.infimum(result.x))    # >= 0
+print(constraint.worst_case_gamma(result.x))
+```
+
+Multiple constraints can be passed as a list. Each has its own `B`, `T`, and
+uncertainty set, independent of the objective's `A` and `S`. When the
+constraint list is empty, `ConstrainedMarkowitzSolver` reduces to
+`MarkowitzSolver`.
 
 ### Matrix game with box uncertainty
 
@@ -195,6 +252,7 @@ and `dim`.
 | Solver | Method | Best for |
 |---|---|---|
 | `MarkowitzSolver` | Exact SOCP (Clarabel) | `MatrixGame + Ellipsoid + AllocationDecision` |
+| `ConstrainedMarkowitzSolver` | Exact SOCP (Clarabel) | Same, plus robust constraints |
 | `MaximinLinearSolver` | Exact LP (HiGHS) | `MatrixGame + Hypercube + AllocationDecision` |
 | `AcceleratedProximalGradientDualSolver` | FISTA, O(1/k²) | Smooth dual objectives |
 | `ProximalSubgradientDualSolver` | Projected subgradient, O(1/√k) | General dual objectives |
@@ -204,15 +262,41 @@ and `dim`.
 
 1. If your problem fits `MatrixGame + Ellipsoid + AllocationDecision`, use
    `MarkowitzSolver` — it finds the exact global optimum.
-2. If your problem fits `MatrixGame + Hypercube + AllocationDecision`, use
+2. If you also need robust constraints, use `ConstrainedMarkowitzSolver` with
+   a list of `MatrixGameEllipsoidRobustConstraint` objects.
+3. If your problem fits `MatrixGame + Hypercube + AllocationDecision`, use
    `MaximinLinearSolver`.
-3. For other combinations with a differentiable dual objective, use
+4. For other combinations with a differentiable dual objective, use
    `AcceleratedProximalGradientDualSolver` — it converges at O(1/k²).
-4. For non-smooth dual objectives, use `ProximalSubgradientDualSolver`.
+5. For non-smooth dual objectives, use `ProximalSubgradientDualSolver`.
 
 All iterative solvers accept `max_iter`, `tol`, and `step_size` parameters and
 return a `SolverResult` dataclass with fields `x`, `objective`, `n_iterations`,
 and `converged`.
+
+### Robust constraints
+
+A `RobustConstraint` represents `inf_{gamma in T} r(c; gamma) >= 0`: a side
+condition on `c` that must hold for every `gamma` in an uncertainty set `T`.
+Because the infimum of a family of concave-in-`c` functions is concave, the
+constraint is convex and compatible with the SOCP solvers.
+
+| Class | Constraint | Formula for `q(c)` |
+|---|---|---|
+| `MatrixGameEllipsoidRobustConstraint(B, T)` | `c^T B gamma >= 0` for all `gamma in T` | `c^T B γ̂ − ‖Σ_T^{1/2} B^T c‖₂` |
+
+The constraint's `B` matrix (shape `m × p`) and uncertainty set `T`
+(an `Ellipsoid` of dimension `p`) are fully independent of the objective's
+`A` and `S` — they can have different sizes and covariances.
+
+Key methods on `MatrixGameEllipsoidRobustConstraint`:
+
+- `infimum(c)` — evaluates `q(c)`; the constraint is satisfied when this is ≥ 0.
+- `worst_case_gamma(c)` — returns `γ*(c) = argmin_{γ ∈ T} c^T B γ`.
+- `is_satisfied(c, atol=0.0)` — convenience check `q(c) >= -atol`.
+
+Implement `RobustConstraint` to add constraints with other structure: provide
+`dim_c`, `infimum`, and `worst_case_gamma`.
 
 ### Problem objectives (dual and primal)
 
