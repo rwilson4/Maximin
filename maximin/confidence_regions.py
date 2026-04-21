@@ -727,9 +727,7 @@ class CriterionRegion(ConfidenceRegion, ABC):
     def loss(self, beta: npt.NDArray[np.float64]) -> float:
         """Convex criterion loss at ``beta``."""
 
-    def grad_loss(
-        self, beta: npt.NDArray[np.float64]
-    ) -> npt.NDArray[np.float64]:
+    def grad_loss(self, beta: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
         """Gradient of the loss (forward finite differences fallback)."""
         eps = 1e-7
         f0 = self.loss(beta)
@@ -945,9 +943,7 @@ class HuberCriterionRegion(CriterionRegion):
             )
         )
 
-    def grad_loss(
-        self, beta: npt.NDArray[np.float64]
-    ) -> npt.NDArray[np.float64]:
+    def grad_loss(self, beta: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
         r"""Gradient of the Huber loss: :math:`-X^\top \psi_\delta(y - X\beta)`.
 
         The influence function is

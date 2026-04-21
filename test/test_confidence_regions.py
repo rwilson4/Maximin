@@ -679,21 +679,15 @@ class TestHuberCriterionRegion:
 
     def test_invalid_shape_mismatch(self) -> None:
         with pytest.raises(ValueError, match="same number of rows"):
-            HuberCriterionRegion(
-                np.ones((5, 2)), np.ones(4), delta=1.0, threshold=1.0
-            )
+            HuberCriterionRegion(np.ones((5, 2)), np.ones(4), delta=1.0, threshold=1.0)
 
     def test_invalid_delta_not_positive(self) -> None:
         with pytest.raises(ValueError, match="positive"):
-            HuberCriterionRegion(
-                np.ones((5, 2)), np.ones(5), delta=0.0, threshold=1.0
-            )
+            HuberCriterionRegion(np.ones((5, 2)), np.ones(5), delta=0.0, threshold=1.0)
 
     def test_invalid_threshold_negative(self) -> None:
         with pytest.raises(ValueError, match="non-negative"):
-            HuberCriterionRegion(
-                np.ones((5, 2)), np.ones(5), delta=1.0, threshold=-0.1
-            )
+            HuberCriterionRegion(np.ones((5, 2)), np.ones(5), delta=1.0, threshold=-0.1)
 
 
 @pytest.mark.parametrize(
