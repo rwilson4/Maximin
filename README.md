@@ -20,6 +20,12 @@ objective uncertainty.
 The library returns a decision `c` that maximizes the **worst-case** outcome
 over all `beta` in `S`, subject to the constraints holding robustly.
 
+Iterative solvers expose per-iteration duality gaps — a certificate that the
+current solution is within `h(β) − f(c)` of optimal — and a built-in
+convergence plot:
+
+![Convergence: duality gap vs. iteration](docs/convergence.png)
+
 ## Why maximin?
 
 Maximin problems arise naturally when making decisions under adversarial or
