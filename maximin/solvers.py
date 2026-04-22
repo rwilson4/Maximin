@@ -76,7 +76,7 @@ class SolverResult:
                 "No duality gaps recorded. Pass primal_objective to a "
                 "DualSolver, or dual_objective to a PrimalSolver."
             )
-        import matplotlib.pyplot as plt  # type: ignore[import-not-found]
+        import matplotlib.pyplot as plt
 
         fig, ax = plt.subplots()
         ax.semilogy(range(1, len(self.duality_gaps) + 1), self.duality_gaps)

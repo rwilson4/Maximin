@@ -81,7 +81,7 @@ class TestSolverResult:
         """plot_convergence must return an Axes object when gaps are present."""
         matplotlib = pytest.importorskip("matplotlib")
         matplotlib.use("Agg")
-        import matplotlib.pyplot as plt  # type: ignore[import-not-found]
+        import matplotlib.pyplot as plt
 
         gaps = np.array([0.5, 0.3, 0.1, 0.01])
         result = SolverResult(
