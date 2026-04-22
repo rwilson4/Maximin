@@ -19,12 +19,16 @@ dependencies = [
     "scipy>=1.15.2,<2",
 ]
 
+[project.optional-dependencies]
+plot = ["matplotlib>=3.7"]
+
 [dependency-groups]
 dev = [
     "pytest>=8.3.5,<9",
     "black>=25.1.0,<26",
     "ruff>=0.11.6,<0.12",
     "mypy>=1.14.0,<2",
+    "maximin[plot]",
 ]
 
 [build-system]

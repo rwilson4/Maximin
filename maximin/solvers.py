@@ -4,6 +4,7 @@
 import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import Any
 
 import clarabel
 import numpy as np
@@ -45,14 +46,44 @@ class SolverResult:
     objective: float
     n_iterations: int
     converged: bool
+    duality_gaps: npt.NDArray[np.float64] | None = None
 
     def __str__(self) -> str:
         status = "converged" if self.converged else "not converged"
-        return (
+        s = (
             f"SolverResult({status}, "
             f"objective={self.objective:.6g}, "
-            f"n_iterations={self.n_iterations})"
+            f"n_iterations={self.n_iterations}"
         )
+        if self.duality_gaps is not None and len(self.duality_gaps) > 0:
+            s += f", final_gap={self.duality_gaps[-1]:.6g}"
+        return s + ")"
+
+    def plot_convergence(self) -> Any:
+        """Plot duality gaps versus iteration on a log scale.
+
+        Returns the :class:`matplotlib.axes.Axes` so the caller can
+        customise the figure further.  Call ``plt.show()`` to display.
+
+        Raises
+        ------
+        ValueError
+            If the solver was not given a primal/dual objective and no
+            duality gaps were recorded.
+        """
+        if self.duality_gaps is None:
+            raise ValueError(
+                "No duality gaps recorded. Pass primal_objective to a "
+                "DualSolver, or dual_objective to a PrimalSolver."
+            )
+        import matplotlib.pyplot as plt
+
+        fig, ax = plt.subplots()
+        ax.semilogy(range(1, len(self.duality_gaps) + 1), self.duality_gaps)
+        ax.set_xlabel("Iteration")
+        ax.set_ylabel("Duality gap")
+        ax.set_title("Convergence")
+        return ax
 
 
 class DualSolver(ABC):
@@ -142,6 +173,13 @@ class ProximalSubgradientDualSolver(DualSolver):
         Convergence tolerance on the step norm.
     step_size : float
         Initial step size :math:`\alpha_0`.
+    primal_objective : PrimalObjective or None
+        If provided, the duality gap :math:`h(\beta^k) - f(c^k)` is
+        computed at every iterate and stored in
+        :attr:`SolverResult.duality_gaps`.  The worst-case
+        :math:`\beta^k = \text{objective.minimizer}(c^k)` is reused from
+        the dual objective, so no extra inner optimisation is required for
+        analytic duals.
     """
 
     def __init__(
@@ -151,12 +189,14 @@ class ProximalSubgradientDualSolver(DualSolver):
         max_iter: int = 1_000,
         tol: float = 1e-6,
         step_size: float = 1e-2,
+        primal_objective: PrimalObjective | None = None,
     ) -> None:
         self._objective = objective
         self._space = space
         self._max_iter = max_iter
         self._tol = tol
         self._step_size = step_size
+        self._primal_objective = primal_objective
 
     def solve(
         self,
@@ -167,6 +207,7 @@ class ProximalSubgradientDualSolver(DualSolver):
         best_c = c.copy()
         best_obj = self._objective.evaluate(c)
         alpha0 = self._step_size
+        gaps: list[float] = []
 
         for t in range(self._max_iter):
             alpha = alpha0 / math.sqrt(t + 1)
@@ -174,6 +215,10 @@ class ProximalSubgradientDualSolver(DualSolver):
             c_new = self._space.project(c + alpha * grad)
 
             obj = self._objective.evaluate(c_new)
+            if self._primal_objective is not None:
+                beta_k = self._objective.minimizer(c_new)
+                gaps.append(self._primal_objective.evaluate(beta_k) - obj)
+
             if obj > best_obj:
                 best_obj = obj
                 best_c = c_new.copy()
@@ -184,6 +229,7 @@ class ProximalSubgradientDualSolver(DualSolver):
                     objective=best_obj,
                     n_iterations=t + 1,
                     converged=True,
+                    duality_gaps=np.array(gaps) if gaps else None,
                 )
             c = c_new
 
@@ -192,6 +238,7 @@ class ProximalSubgradientDualSolver(DualSolver):
             objective=best_obj,
             n_iterations=self._max_iter,
             converged=False,
+            duality_gaps=np.array(gaps) if gaps else None,
         )
 
 
@@ -222,6 +269,13 @@ class ProximalSubgradientPrimalSolver(PrimalSolver):
         Convergence tolerance on the step norm.
     step_size : float
         Initial step size :math:`\alpha_0`.
+    dual_objective : DualObjective or None
+        If provided, the duality gap :math:`h(\beta^k) - f(c^k)` is
+        computed at every iterate and stored in
+        :attr:`SolverResult.duality_gaps`.  The best-response
+        :math:`c^k = \text{objective.maximizer}(\beta^k)` is obtained from
+        the primal objective, so no separate inner optimisation is needed for
+        analytic primals.
     """
 
     def __init__(
@@ -231,12 +285,14 @@ class ProximalSubgradientPrimalSolver(PrimalSolver):
         max_iter: int = 1_000,
         tol: float = 1e-6,
         step_size: float = 1e-2,
+        dual_objective: DualObjective | None = None,
     ) -> None:
         self._objective = objective
         self._region = region
         self._max_iter = max_iter
         self._tol = tol
         self._step_size = step_size
+        self._dual_objective = dual_objective
 
     def solve(
         self,
@@ -247,6 +303,7 @@ class ProximalSubgradientPrimalSolver(PrimalSolver):
         best_beta = beta.copy()
         best_obj = self._objective.evaluate(beta)
         alpha0 = self._step_size
+        gaps: list[float] = []
 
         for t in range(self._max_iter):
             alpha = alpha0 / math.sqrt(t + 1)
@@ -254,6 +311,10 @@ class ProximalSubgradientPrimalSolver(PrimalSolver):
             beta_new = self._region.project(beta - alpha * grad)
 
             obj = self._objective.evaluate(beta_new)
+            if self._dual_objective is not None:
+                c_k = self._objective.maximizer(beta_new)
+                gaps.append(obj - self._dual_objective.evaluate(c_k))
+
             if obj < best_obj:
                 best_obj = obj
                 best_beta = beta_new.copy()
@@ -264,6 +325,7 @@ class ProximalSubgradientPrimalSolver(PrimalSolver):
                     objective=best_obj,
                     n_iterations=t + 1,
                     converged=True,
+                    duality_gaps=np.array(gaps) if gaps else None,
                 )
             beta = beta_new
 
@@ -272,6 +334,7 @@ class ProximalSubgradientPrimalSolver(PrimalSolver):
             objective=best_obj,
             n_iterations=self._max_iter,
             converged=False,
+            duality_gaps=np.array(gaps) if gaps else None,
         )
 
 
@@ -330,6 +393,10 @@ class AcceleratedProximalGradientDualSolver(DualSolver):
         in the §4.3 backtracking rule (the step size is divided by this
         value on each failed trial).  ``None`` disables backtracking and
         uses ``step_size`` as a constant.
+    primal_objective : PrimalObjective or None
+        If provided, the duality gap :math:`h(\beta^k) - f(c^k)` is
+        computed at every iterate and stored in
+        :attr:`SolverResult.duality_gaps`.
     """
 
     def __init__(
@@ -340,6 +407,7 @@ class AcceleratedProximalGradientDualSolver(DualSolver):
         tol: float = 1e-6,
         step_size: float = 1e-2,
         backtrack_factor: float | None = 2.0,
+        primal_objective: PrimalObjective | None = None,
     ) -> None:
         self._objective = objective
         self._space = space
@@ -347,6 +415,7 @@ class AcceleratedProximalGradientDualSolver(DualSolver):
         self._tol = tol
         self._step_size = step_size
         self._backtrack_factor = backtrack_factor
+        self._primal_objective = primal_objective
 
     def solve(
         self,
@@ -354,6 +423,15 @@ class AcceleratedProximalGradientDualSolver(DualSolver):
     ) -> SolverResult:
         """Run accelerated projected gradient ascent from ``c0``."""
         x0 = self._space.project(c0.copy())
+        gaps: list[float] = []
+        callback = None
+        if self._primal_objective is not None:
+            primal = self._primal_objective
+
+            def callback(x_new: npt.NDArray[np.float64], obj_new: float) -> None:
+                beta_k = self._objective.minimizer(x_new)
+                gaps.append(primal.evaluate(beta_k) - obj_new)
+
         best_c, best_obj, n_iters, converged = _fista(
             grad_fn=self._objective.grad_c,
             obj_fn=self._objective.evaluate,
@@ -364,12 +442,14 @@ class AcceleratedProximalGradientDualSolver(DualSolver):
             tol=self._tol,
             minimize=False,
             backtrack_factor=self._backtrack_factor,
+            per_iter_callback=callback,
         )
         return SolverResult(
             x=best_c,
             objective=best_obj,
             n_iterations=n_iters,
             converged=converged,
+            duality_gaps=np.array(gaps) if gaps else None,
         )
 
 

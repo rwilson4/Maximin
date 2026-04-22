@@ -18,6 +18,7 @@ def _fista(
     tol: float,
     minimize: bool,
     backtrack_factor: float | None = None,
+    per_iter_callback: Callable[[npt.NDArray[np.float64], float], None] | None = None,
 ) -> tuple[npt.NDArray[np.float64], float, int, bool]:
     r"""FISTA projected gradient iteration (Beck & Teboulle, 2009).
 
@@ -82,6 +83,10 @@ def _fista(
         (equivalently, the divisor applied to :math:`\alpha` on each failed
         backtracking step).  ``None`` disables backtracking and uses a
         constant step size.
+    per_iter_callback : Callable or None
+        Optional function called after each iterate update with
+        ``(x_new, obj_new)``.  Used by outer solvers to record per-iteration
+        diagnostics such as duality gaps.
 
     Returns
     -------
@@ -118,6 +123,9 @@ def _fista(
         else:
             x_new = project_fn(y + sign * alpha * grad_y)
             obj_new = obj_fn(x_new)
+
+        if per_iter_callback is not None:
+            per_iter_callback(x_new, obj_new)
 
         if (minimize and obj_new < best_obj) or (not minimize and obj_new > best_obj):
             best_obj = obj_new
