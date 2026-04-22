@@ -953,3 +953,191 @@ class HuberCriterionRegion(CriterionRegion):
         r = self._y - self._X @ beta
         psi = np.where(np.abs(r) <= self._delta, r, self._delta * np.sign(r))
         return -self._X.T @ psi
+
+
+class ModelDrift(ConfidenceRegion, ABC):
+    r"""Abstract base for drift-augmented confidence regions.
+
+    Wraps an existing confidence region :math:`S` and adds a model-drift
+    constraint: the true future parameter :math:`\gamma` must satisfy
+    :math:`D(\beta, \gamma) \le \varepsilon` for *some*
+    :math:`\beta \in S`.  The resulting region is
+
+    .. math::
+
+        T = \bigl\{ \gamma :
+            \min_{\beta \in S} D(\beta, \gamma) \le \varepsilon \bigr\}
+
+    which is the :math:`\varepsilon`-expansion of :math:`S` under metric
+    :math:`D`.  Because :math:`T` satisfies the :class:`ConfidenceRegion`
+    interface it composes transparently with all existing solvers.
+
+    Parameters
+    ----------
+    region : ConfidenceRegion
+        The base confidence region :math:`S` for the historical parameter
+        :math:`\beta`.
+    epsilon : float
+        Drift tolerance :math:`\varepsilon \ge 0`.
+    """
+
+    def __init__(self, region: ConfidenceRegion, epsilon: float) -> None:
+        if epsilon < 0:
+            raise ValueError(f"epsilon must be non-negative, got {epsilon}")
+        self._region = region
+        self._epsilon = epsilon
+
+    @property
+    def dim(self) -> int:
+        """Dimension of the parameter space."""
+        return self._region.dim
+
+    @property
+    def epsilon(self) -> float:
+        """Drift tolerance."""
+        return self._epsilon
+
+    @abstractmethod
+    def _min_distance_and_grad(
+        self,
+        gamma: npt.NDArray[np.float64],
+    ) -> tuple[float, npt.NDArray[np.float64]]:
+        r"""Minimum distance from :math:`\gamma` to :math:`S` and its gradient.
+
+        Returns
+        -------
+        tuple[float, npt.NDArray[np.float64]]
+            ``(d, g)`` where ``d = min_{beta in S} D(beta, gamma)`` and
+            ``g = grad_gamma d`` (via the envelope theorem).
+        """
+
+    def contains(
+        self,
+        gamma: npt.NDArray[np.float64],
+        atol: float = 1e-9,
+    ) -> bool:
+        r"""Return True if ``gamma`` lies in :math:`T`."""
+        dist, _ = self._min_distance_and_grad(gamma)
+        return bool(dist <= self._epsilon + atol)
+
+    def project(
+        self,
+        gamma: npt.NDArray[np.float64],
+    ) -> npt.NDArray[np.float64]:
+        r"""Euclidean projection of ``gamma`` onto :math:`T` via SLSQP.
+
+        Any point in :math:`S` is feasible for :math:`T` (since
+        :math:`D(x, x) = 0 \le \varepsilon`), so ``region.project(gamma)``
+        always provides a valid warm start.
+
+        Parameters
+        ----------
+        gamma : npt.NDArray[np.float64]
+            Point to project, shape ``(n,)``.
+
+        Returns
+        -------
+        npt.NDArray[np.float64]
+            Projected point in :math:`T`, shape ``(n,)``.
+        """
+        if self.contains(gamma):
+            return gamma.copy()
+
+        x0 = self._region.project(gamma)
+        epsilon = self._epsilon
+
+        def _constraint_val(x: npt.NDArray[np.float64]) -> float:
+            return float(epsilon - self._min_distance_and_grad(x)[0])
+
+        def _constraint_jac(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+            return -self._min_distance_and_grad(x)[1]
+
+        result = scipy.optimize.minimize(
+            fun=lambda x: 0.5 * float(np.dot(x - gamma, x - gamma)),
+            jac=lambda x: x - gamma,
+            x0=x0,
+            method="SLSQP",
+            constraints=[
+                {"type": "ineq", "fun": _constraint_val, "jac": _constraint_jac}
+            ],
+            options={"ftol": 1e-12, "maxiter": 1000},
+        )
+        result_x: npt.NDArray[np.float64] = result.x
+
+        # Post-SLSQP feasibility recovery: bisect toward x0 (always feasible),
+        # mirroring the pattern in LogConcaveLikelihoodRegion.project.
+        if not self.contains(result_x):
+            t_lo, t_hi = 0.0, 1.0
+            for _ in range(50):
+                t_mid = (t_lo + t_hi) / 2.0
+                x_mid = (1.0 - t_mid) * result_x + t_mid * x0
+                if self.contains(x_mid):
+                    t_hi = t_mid
+                else:
+                    t_lo = t_mid
+            result_x = (1.0 - t_hi) * result_x + t_hi * x0
+
+        return result_x
+
+
+class EuclideanModelDrift(ModelDrift):
+    r"""Drift region with Euclidean distance.
+
+    .. math::
+
+        T = \bigl\{ \gamma :
+            \operatorname{dist}(\gamma, S) \le \varepsilon \bigr\}
+          = S \oplus B(0, \varepsilon)
+
+    where :math:`\oplus` is the Minkowski sum and
+    :math:`\operatorname{dist}(\gamma, S) = \|\gamma - \pi_S(\gamma)\|_2`.
+
+    For convex :math:`S`, both :meth:`contains` and :meth:`project` have
+    efficient closed forms via a single call to ``region.project()``.
+
+    Parameters
+    ----------
+    region : ConfidenceRegion
+        The base confidence region :math:`S`.
+    epsilon : float
+        Drift radius :math:`\varepsilon \ge 0`.
+    """
+
+    def _min_distance_and_grad(
+        self,
+        gamma: npt.NDArray[np.float64],
+    ) -> tuple[float, npt.NDArray[np.float64]]:
+        beta_star = self._region.project(gamma)
+        diff = gamma - beta_star
+        dist = float(np.linalg.norm(diff))
+        if dist < 1e-12:
+            return 0.0, np.zeros_like(gamma)
+        return dist, diff / dist
+
+    def contains(
+        self,
+        gamma: npt.NDArray[np.float64],
+        atol: float = 1e-9,
+    ) -> bool:
+        r"""Return True if ``dist(gamma, S) <= epsilon``."""
+        beta_star = self._region.project(gamma)
+        return bool(np.linalg.norm(gamma - beta_star) <= self._epsilon + atol)
+
+    def project(
+        self,
+        gamma: npt.NDArray[np.float64],
+    ) -> npt.NDArray[np.float64]:
+        r"""Project ``gamma`` onto :math:`S \oplus B(0, \varepsilon)`.
+
+        For exterior points the formula is
+        :math:`\pi_S(\gamma) + \varepsilon \,
+        (\gamma - \pi_S(\gamma)) / \|\gamma - \pi_S(\gamma)\|`,
+        which follows from minimizing
+        :math:`(\|\gamma - \beta\| - \varepsilon)^2` over :math:`\beta \in S`.
+        """
+        beta_star = self._region.project(gamma)
+        diff = gamma - beta_star
+        dist = float(np.linalg.norm(diff))
+        if dist <= self._epsilon:
+            return gamma.copy()
+        return np.asarray(beta_star + self._epsilon * diff / dist, dtype=np.float64)
