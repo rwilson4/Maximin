@@ -215,6 +215,58 @@ region = BinomialRegion(n_trials=100, n_successes=80, confidence=0.95)
 
 Analogous classes exist for Poisson, Gamma, and Huber-robust criteria.
 
+### Model drift
+
+When `beta` is estimated from past data but the decision executes in the
+future, the true parameter `gamma` may differ from `beta` by some bounded
+amount. `EuclideanModelDrift` wraps any existing confidence region `S` and
+expands it by a drift radius `epsilon`:
+
+```
+T = { gamma : dist(gamma, S) <= epsilon }
+```
+
+This models the combined uncertainty: estimation error (captured by `S`) plus
+temporal drift (captured by `epsilon`). `T` satisfies the same
+`ConfidenceRegion` interface as `S`, so it is a drop-in replacement in any
+solver.
+
+```python
+import numpy as np
+from maximin import (
+    AcceleratedProximalGradientDualSolver,
+    AllocationDecision,
+    DefaultDualObjective,
+    Ellipsoid,
+    EuclideanModelDrift,
+    MatrixGame,
+)
+
+# Step 1: build the confidence region for beta from historical data
+beta_hat = np.array([0.6, 0.4])          # estimated last week
+Sigma = 0.01 * np.eye(2)                 # estimation uncertainty
+historical_region = Ellipsoid(beta_hat, Sigma)
+
+# Step 2: wrap it with a drift layer — gamma can be up to 0.1 away from S
+drift_region = EuclideanModelDrift(historical_region, epsilon=0.1)
+
+# Step 3: use drift_region exactly like any other ConfidenceRegion
+A = np.eye(2)
+game = MatrixGame(A)
+space = AllocationDecision(2)
+obj = DefaultDualObjective(game, drift_region)   # inner min over T at each step
+result = AcceleratedProximalGradientDualSolver(obj, space).solve(np.ones(2) / 2)
+print(result)
+```
+
+`result.objective` is now the worst-case payoff over `T`, hedging against
+both estimation error and up to `epsilon` of drift. Setting `epsilon=0`
+recovers the original problem over `S` exactly.
+
+To define drift under a different metric, subclass `ModelDrift` and implement
+`_min_distance_and_grad(gamma)` — the base class provides the SLSQP-based
+`project` and `contains` automatically.
+
 ## Building blocks
 
 Maximin is built from four composable components. Mix and match to fit your
@@ -240,6 +292,11 @@ and `grad_beta`.
 | `PoissonRegion(n, k, confidence)` | LRT region for Poisson likelihood | Count data |
 | `GammaRegion(n, sum_x, confidence)` | LRT region for Gamma likelihood | Positive continuous outcomes |
 | `HuberCriterionRegion(...)` | Huber robust criterion region | Outlier-robust estimation |
+| `EuclideanModelDrift(region, epsilon)` | `{gamma : dist(gamma, S) <= epsilon}` | Temporal drift wrapper |
+
+`EuclideanModelDrift` and the abstract `ModelDrift` base class let you add a
+drift layer on top of any existing confidence region — see the
+[Model drift](#model-drift) quick-start section above.
 
 Implement `ConfidenceRegion` to add your own: provide `project`, `contains`,
 and `dim`.
