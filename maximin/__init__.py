@@ -6,10 +6,12 @@ from maximin.confidence_regions import (
     ConfidenceRegion,
     CriterionRegion,
     Ellipsoid,
+    EuclideanModelDrift,
     GammaRegion,
     HuberCriterionRegion,
     Hypercube,
     LogConcaveLikelihoodRegion,
+    ModelDrift,
     PoissonRegion,
 )
 from maximin.decision_spaces import AllocationDecision, DecisionSpace
@@ -53,6 +55,7 @@ __all__ = [
     "DualObjective",
     "DualSolver",
     "Ellipsoid",
+    "EuclideanModelDrift",
     "GammaRegion",
     "HuberCriterionRegion",
     "Hypercube",
@@ -62,6 +65,7 @@ __all__ = [
     "MatrixGameEllipsoidDualObjective",
     "MatrixGameEllipsoidRobustConstraint",
     "MaximinLinearSolver",
+    "ModelDrift",
     "OutcomeModel",
     "PoissonRegion",
     "PrimalObjective",

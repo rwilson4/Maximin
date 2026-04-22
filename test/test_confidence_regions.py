@@ -8,9 +8,11 @@ from scipy.stats import chi2
 from maximin.confidence_regions import (
     BinomialRegion,
     Ellipsoid,
+    EuclideanModelDrift,
     GammaRegion,
     HuberCriterionRegion,
     Hypercube,
+    ModelDrift,
     PoissonRegion,
 )
 
@@ -723,3 +725,224 @@ def test_huber_project_idempotent(seed: int, p: int) -> None:
         np.testing.assert_allclose(
             region.project(proj), proj, atol=1e-6, err_msg="not idempotent"
         )
+
+
+# ---------------------------------------------------------------------------
+# EuclideanModelDrift
+# ---------------------------------------------------------------------------
+
+
+class TestEuclideanModelDrift:
+    """Tests for EuclideanModelDrift wrapping an Ellipsoid."""
+
+    @staticmethod
+    def _unit_ball_drift(epsilon: float = 0.5) -> EuclideanModelDrift:
+        """Unit ball in R^2 with Euclidean drift epsilon."""
+        inner = Ellipsoid(np.zeros(2), np.eye(2))
+        return EuclideanModelDrift(inner, epsilon)
+
+    def test_center_is_inside(self) -> None:
+        drift = self._unit_ball_drift()
+        assert drift.contains(np.zeros(2))
+
+    def test_inner_region_subset_of_drift(self) -> None:
+        drift = self._unit_ball_drift(epsilon=0.5)
+        # Any point inside the unit ball is inside T
+        assert drift.contains(np.array([0.8, 0.0]))
+        assert drift.contains(np.array([0.0, 0.6]))
+
+    def test_project_inside_unchanged(self) -> None:
+        drift = self._unit_ball_drift(epsilon=0.5)
+        # Point within 0.5 of unit ball (total distance from origin <= 1.5)
+        gamma = np.array([1.2, 0.0])
+        np.testing.assert_allclose(drift.project(gamma), gamma)
+
+    def test_project_known_value_unit_ball(self) -> None:
+        # Unit ball, epsilon=0.5, gamma=2*e1 → project_S(gamma)=e1,
+        # dist=1 > 0.5, so result = e1 + 0.5*(e1) = 1.5*e1
+        drift = self._unit_ball_drift(epsilon=0.5)
+        gamma = np.array([2.0, 0.0])
+        expected = np.array([1.5, 0.0])
+        np.testing.assert_allclose(drift.project(gamma), expected, atol=1e-12)
+
+    def test_project_known_value_2d(self) -> None:
+        # gamma = [3, 4] (norm 5), project onto unit ball = [3/5, 4/5],
+        # diff = [3, 4] - [3/5, 4/5] = [12/5, 16/5], dist = 4,
+        # result = [3/5, 4/5] + 0.5 * [12/5, 16/5] / 4 = [3/5 + 3/20, 4/5 + 4/20]
+        #        = [15/20, 20/20] = [0.75, 1.0] -- let's compute explicitly
+        drift = self._unit_ball_drift(epsilon=0.5)
+        gamma = np.array([3.0, 4.0])
+        beta_star = gamma / np.linalg.norm(gamma)  # [0.6, 0.8]
+        diff = gamma - beta_star  # [2.4, 3.2]
+        dist = np.linalg.norm(diff)  # 4.0
+        expected = beta_star + 0.5 * diff / dist
+        np.testing.assert_allclose(drift.project(gamma), expected, atol=1e-12)
+
+    def test_project_outside_lands_on_boundary(self) -> None:
+        inner = Ellipsoid(np.zeros(2), np.eye(2))
+        drift = EuclideanModelDrift(inner, epsilon=0.3)
+        gamma = np.array([3.0, 0.0])
+        proj = drift.project(gamma)
+        # dist from proj to inner region should be exactly epsilon
+        beta_star = inner.project(proj)
+        np.testing.assert_allclose(
+            np.linalg.norm(proj - beta_star), 0.3, atol=1e-10
+        )
+
+    def test_project_idempotent(self) -> None:
+        drift = self._unit_ball_drift(epsilon=0.5)
+        gamma = np.array([5.0, -3.0])
+        proj = drift.project(gamma)
+        np.testing.assert_allclose(drift.project(proj), proj, atol=1e-12)
+
+    def test_epsilon_zero_matches_inner_project(self) -> None:
+        inner = Ellipsoid(np.zeros(2), np.eye(2))
+        drift = EuclideanModelDrift(inner, epsilon=0.0)
+        gamma = np.array([3.0, 4.0])
+        np.testing.assert_allclose(drift.project(gamma), inner.project(gamma))
+
+    def test_invalid_negative_epsilon(self) -> None:
+        inner = Ellipsoid(np.zeros(2), np.eye(2))
+        with pytest.raises(ValueError, match="epsilon"):
+            EuclideanModelDrift(inner, epsilon=-0.1)
+
+    def test_dim(self) -> None:
+        inner = Ellipsoid(np.zeros(3), np.eye(3))
+        drift = EuclideanModelDrift(inner, epsilon=1.0)
+        assert drift.dim == 3
+
+    def test_epsilon_property(self) -> None:
+        inner = Ellipsoid(np.zeros(2), np.eye(2))
+        drift = EuclideanModelDrift(inner, epsilon=0.7)
+        assert drift.epsilon == 0.7
+
+    def test_hypercube_inner_region(self) -> None:
+        # Hypercube [0,1]^2, epsilon=0.5; gamma=[2, 0.5] → proj_S=[1,0.5],
+        # dist=1 > 0.5, result=[1.5, 0.5]
+        inner = Hypercube(np.zeros(2), np.ones(2))
+        drift = EuclideanModelDrift(inner, epsilon=0.5)
+        gamma = np.array([2.0, 0.5])
+        expected = np.array([1.5, 0.5])
+        np.testing.assert_allclose(drift.project(gamma), expected, atol=1e-12)
+
+    def test_hypercube_interior_point_unchanged(self) -> None:
+        inner = Hypercube(np.zeros(2), np.ones(2))
+        drift = EuclideanModelDrift(inner, epsilon=0.5)
+        # [1.3, 0.5]: proj_S=[1, 0.5], dist=0.3 <= 0.5 → unchanged
+        gamma = np.array([1.3, 0.5])
+        np.testing.assert_allclose(drift.project(gamma), gamma)
+
+
+@pytest.mark.parametrize(
+    "seed,n",
+    [(101, 2), (202, 5), (303, 10), (404, 3)],
+)
+def test_euclidean_drift_always_feasible(seed: int, n: int) -> None:
+    """EuclideanModelDrift.project always produces a point in T."""
+    rng = np.random.default_rng(seed)
+    beta_hat = rng.standard_normal(n)
+    R = rng.standard_normal((n, n))
+    Sigma = R.T @ R + np.eye(n)
+    inner = Ellipsoid(beta_hat, Sigma)
+    drift = EuclideanModelDrift(inner, epsilon=0.5)
+    for _ in range(20):
+        gamma = rng.standard_normal(n) * 5.0
+        proj = drift.project(gamma)
+        assert drift.contains(proj), "projection not in drift region"
+
+
+@pytest.mark.parametrize(
+    "seed,n",
+    [(501, 2), (502, 4)],
+)
+def test_euclidean_drift_project_idempotent(seed: int, n: int) -> None:
+    """EuclideanModelDrift.project is idempotent."""
+    rng = np.random.default_rng(seed)
+    beta_hat = rng.standard_normal(n)
+    R = rng.standard_normal((n, n))
+    Sigma = R.T @ R + np.eye(n)
+    inner = Ellipsoid(beta_hat, Sigma)
+    drift = EuclideanModelDrift(inner, epsilon=0.3)
+    for _ in range(20):
+        gamma = rng.standard_normal(n) * 5.0
+        proj = drift.project(gamma)
+        np.testing.assert_allclose(
+            drift.project(proj), proj, atol=1e-12, err_msg="not idempotent"
+        )
+
+
+@pytest.mark.parametrize(
+    "seed,n",
+    [(601, 2), (602, 5)],
+)
+def test_euclidean_drift_exterior_proj_on_boundary(seed: int, n: int) -> None:
+    """Projection of an exterior point lands exactly on the drift boundary."""
+    rng = np.random.default_rng(seed)
+    beta_hat = rng.standard_normal(n)
+    R = rng.standard_normal((n, n))
+    Sigma = R.T @ R + np.eye(n)
+    inner = Ellipsoid(beta_hat, Sigma)
+    epsilon = 0.4
+    drift = EuclideanModelDrift(inner, epsilon=epsilon)
+    for _ in range(20):
+        # Generate a point well outside T
+        gamma = beta_hat + rng.standard_normal(n) * 10.0
+        if drift.contains(gamma):
+            continue
+        proj = drift.project(gamma)
+        dist_to_inner = float(np.linalg.norm(proj - inner.project(proj)))
+        np.testing.assert_allclose(
+            dist_to_inner, epsilon, atol=1e-10,
+            err_msg="projected point not on drift boundary"
+        )
+
+
+# ---------------------------------------------------------------------------
+# ModelDrift (numerical base-class code path)
+# ---------------------------------------------------------------------------
+
+
+class _NumericalEuclideanDrift(ModelDrift):
+    """Test-only subclass: implements _min_distance_and_grad but inherits
+    the SLSQP-based project/contains from ModelDrift, exercising the
+    numerical code path with the same Euclidean distance."""
+
+    def _min_distance_and_grad(
+        self, gamma: np.ndarray
+    ) -> tuple[float, np.ndarray]:
+        beta_star = self._region.project(gamma)
+        diff = gamma - beta_star
+        dist = float(np.linalg.norm(diff))
+        if dist < 1e-12:
+            return 0.0, np.zeros_like(gamma)
+        return dist, diff / dist
+
+
+class TestModelDriftNumerical:
+    """Verify the SLSQP-based fallback in ModelDrift.project."""
+
+    @staticmethod
+    def _drift(epsilon: float = 0.5) -> _NumericalEuclideanDrift:
+        inner = Ellipsoid(np.zeros(2), np.eye(2))
+        return _NumericalEuclideanDrift(inner, epsilon)
+
+    def test_known_value_unit_ball(self) -> None:
+        # Same analytical case as TestEuclideanModelDrift
+        drift = self._drift(epsilon=0.5)
+        gamma = np.array([2.0, 0.0])
+        expected = np.array([1.5, 0.0])
+        np.testing.assert_allclose(drift.project(gamma), expected, atol=1e-5)
+
+    def test_project_always_feasible(self) -> None:
+        rng = np.random.default_rng(777)
+        inner = Ellipsoid(np.zeros(2), np.eye(2))
+        drift = _NumericalEuclideanDrift(inner, epsilon=0.4)
+        for _ in range(10):
+            gamma = rng.standard_normal(2) * 4.0
+            proj = drift.project(gamma)
+            assert drift.contains(proj), "SLSQP projection not feasible"
+
+    def test_project_inside_unchanged(self) -> None:
+        drift = self._drift(epsilon=0.5)
+        gamma = np.array([1.2, 0.0])  # dist to unit ball = 0.2 < 0.5
+        np.testing.assert_allclose(drift.project(gamma), gamma)
