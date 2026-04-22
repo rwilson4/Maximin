@@ -550,10 +550,15 @@ dependencies = [
     { name = "scipy" },
 ]
 
+[package.optional-dependencies]
+plot = [
+    { name = "matplotlib" },
+]
+
 [package.dev-dependencies]
 dev = [
     { name = "black" },
-    { name = "matplotlib" },
+    { name = "maximin", extra = ["plot"] },
     { name = "mypy" },
     { name = "pytest" },
     { name = "ruff" },
@@ -562,14 +567,16 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "clarabel", specifier = ">=0.11.1" },
+    { name = "matplotlib", marker = "extra == 'plot'", specifier = ">=3.7" },
     { name = "numpy", specifier = ">=2.2.5,<3" },
     { name = "scipy", specifier = ">=1.15.2,<2" },
 ]
+provides-extras = ["plot"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "black", specifier = ">=25.1.0,<26" },
-    { name = "matplotlib", specifier = ">=3.10.8" },
+    { name = "maximin", extras = ["plot"] },
     { name = "mypy", specifier = ">=1.14.0,<2" },
     { name = "pytest", specifier = ">=8.3.5,<9" },
     { name = "ruff", specifier = ">=0.11.6,<0.12" },
