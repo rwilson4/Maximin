@@ -9,12 +9,16 @@ import pytest
 from maximin.confidence_regions import Ellipsoid, Hypercube
 from maximin.decision_spaces import AllocationDecision
 from maximin.outcome_models import MatrixGame
-from maximin.problem_objectives import MatrixGameEllipsoidDualObjective
+from maximin.problem_objectives import (
+    DefaultPrimalObjective,
+    MatrixGameEllipsoidDualObjective,
+)
 from maximin.solvers import (
     AcceleratedProximalGradientDualSolver,
     MarkowitzSolver,
     MaximinLinearSolver,
     ProximalSubgradientDualSolver,
+    ProximalSubgradientPrimalSolver,
     SolverResult,
 )
 
@@ -45,6 +49,51 @@ class TestSolverResult:
             converged=False,
         )
         assert "not converged" in str(result)
+
+    @staticmethod
+    def test_str_includes_final_gap_when_present() -> None:
+        """__str__ should include final_gap when duality_gaps is set."""
+        result = SolverResult(
+            x=np.array([1.0, 0.0]),
+            objective=0.9,
+            n_iterations=2,
+            converged=True,
+            duality_gaps=np.array([0.5, 0.02]),
+        )
+        s = str(result)
+        assert "final_gap" in s
+        assert "0.02" in s
+
+    @staticmethod
+    def test_plot_convergence_no_gaps_raises() -> None:
+        """plot_convergence must raise ValueError when no gaps were recorded."""
+        result = SolverResult(
+            x=np.array([1.0, 0.0]),
+            objective=0.9,
+            n_iterations=2,
+            converged=True,
+        )
+        with pytest.raises(ValueError, match="duality gaps"):
+            result.plot_convergence()
+
+    @staticmethod
+    def test_plot_convergence_returns_axes() -> None:
+        """plot_convergence must return an Axes object when gaps are present."""
+        matplotlib = pytest.importorskip("matplotlib")
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt  # type: ignore[import-not-found]
+
+        gaps = np.array([0.5, 0.3, 0.1, 0.01])
+        result = SolverResult(
+            x=np.array([1.0, 0.0]),
+            objective=0.9,
+            n_iterations=4,
+            converged=True,
+            duality_gaps=gaps,
+        )
+        ax = result.plot_convergence()
+        assert ax is not None
+        plt.close("all")
 
 
 class TestProximalSubgradientDualSolver:
@@ -112,6 +161,31 @@ class TestProximalSubgradientDualSolver:
         initial_obj = obj.evaluate(space.project(c0))
         result = solver.solve(c0)
         assert result.objective >= initial_obj - 1e-12
+
+    @staticmethod
+    def test_duality_gaps_none_by_default() -> None:
+        """Without primal_objective, duality_gaps must be None."""
+        _, _, solver = TestProximalSubgradientDualSolver._simple_problem()
+        result = solver.solve(np.array([0.5, 0.5]))
+        assert result.duality_gaps is None
+
+    @staticmethod
+    def test_duality_gaps_tracked() -> None:
+        """With primal_objective, gaps are non-negative and shrink."""
+        game = MatrixGame(np.eye(2))
+        region = Ellipsoid(np.array([1.0, 0.0]), 0.01 * np.eye(2))
+        space = AllocationDecision(2)
+        obj = MatrixGameEllipsoidDualObjective(game, region)
+        primal_obj = DefaultPrimalObjective(game, space)
+        solver = ProximalSubgradientDualSolver(
+            obj, space, step_size=1.0, primal_objective=primal_obj
+        )
+        # Start far from the optimum [1, 0] so the first gap is clearly positive.
+        result = solver.solve(np.array([0.1, 0.9]))
+        assert result.duality_gaps is not None
+        assert len(result.duality_gaps) == result.n_iterations
+        assert np.all(result.duality_gaps >= -1e-10)
+        assert result.duality_gaps[-1] < result.duality_gaps[0]
 
 
 class TestAcceleratedProximalGradientDualSolver:
@@ -209,6 +283,24 @@ class TestAcceleratedProximalGradientDualSolver:
         assert result.objective >= initial_obj - 1e-12
 
     @staticmethod
+    def test_duality_gaps_tracked() -> None:
+        """With primal_objective, APGD gaps are non-negative and shrink."""
+        game = MatrixGame(np.eye(2))
+        region = Ellipsoid(np.array([1.0, 0.0]), 0.01 * np.eye(2))
+        space = AllocationDecision(2)
+        obj = MatrixGameEllipsoidDualObjective(game, region)
+        primal_obj = DefaultPrimalObjective(game, space)
+        solver = AcceleratedProximalGradientDualSolver(
+            obj, space, step_size=1.0, primal_objective=primal_obj
+        )
+        # Start far from the optimum [1, 0] so the first gap is clearly positive.
+        result = solver.solve(np.array([0.1, 0.9]))
+        assert result.duality_gaps is not None
+        assert len(result.duality_gaps) == result.n_iterations
+        assert np.all(result.duality_gaps >= -1e-10)
+        assert result.duality_gaps[-1] < result.duality_gaps[0]
+
+    @staticmethod
     def test_backtracking_with_large_step_size() -> None:
         r"""Backtracking must rescue a step size that would otherwise diverge.
 
@@ -260,6 +352,52 @@ def test_dual_solver_feasible_random(seed: int, m: int, n: int) -> None:
     c0 = np.ones(m) / m
     result = solver.solve(c0)
     assert space.contains(result.x), f"result not feasible: {result.x}"
+
+
+class TestProximalSubgradientPrimalSolver:
+    """Tests for ProximalSubgradientPrimalSolver."""
+
+    @staticmethod
+    def _simple_problem() -> tuple[
+        DefaultPrimalObjective,
+        Ellipsoid,
+        ProximalSubgradientPrimalSolver,
+    ]:
+        r"""Set up a 2-option game for the primal solver.
+
+        With A = I_2, beta_hat = [1, 0], Sigma = 0.01 I_2:
+        h(beta) = max(beta_1, beta_2), minimized over the ellipsoid
+        at beta* near [0.9, 0] with h* = 0.9.
+        """
+        game = MatrixGame(np.eye(2))
+        region = Ellipsoid(np.array([1.0, 0.0]), 0.01 * np.eye(2))
+        space = AllocationDecision(2)
+        primal_obj = DefaultPrimalObjective(game, space)
+        solver = ProximalSubgradientPrimalSolver(primal_obj, region, step_size=0.01)
+        return primal_obj, region, solver
+
+    @staticmethod
+    def test_duality_gaps_none_by_default() -> None:
+        """Without dual_objective, duality_gaps must be None."""
+        _, _, solver = TestProximalSubgradientPrimalSolver._simple_problem()
+        result = solver.solve(np.array([1.0, 0.0]))
+        assert result.duality_gaps is None
+
+    @staticmethod
+    def test_duality_gaps_tracked() -> None:
+        """With dual_objective, gaps are non-negative and have correct length."""
+        game = MatrixGame(np.eye(2))
+        region = Ellipsoid(np.array([1.0, 0.0]), 0.01 * np.eye(2))
+        space = AllocationDecision(2)
+        primal_obj = DefaultPrimalObjective(game, space, max_iter=50)
+        dual_obj = MatrixGameEllipsoidDualObjective(game, region)
+        solver = ProximalSubgradientPrimalSolver(
+            primal_obj, region, max_iter=10, step_size=0.01, dual_objective=dual_obj
+        )
+        result = solver.solve(np.array([1.0, 0.0]))
+        assert result.duality_gaps is not None
+        assert len(result.duality_gaps) == result.n_iterations
+        assert np.all(result.duality_gaps >= -1e-10)
 
 
 class TestMarkowitzSolver:
