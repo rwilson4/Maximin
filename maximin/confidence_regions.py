@@ -1140,6 +1140,4 @@ class EuclideanModelDrift(ModelDrift):
         dist = float(np.linalg.norm(diff))
         if dist <= self._epsilon:
             return gamma.copy()
-        return np.asarray(
-            beta_star + self._epsilon * diff / dist, dtype=np.float64
-        )
+        return np.asarray(beta_star + self._epsilon * diff / dist, dtype=np.float64)

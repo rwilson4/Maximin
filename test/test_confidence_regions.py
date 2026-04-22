@@ -785,9 +785,7 @@ class TestEuclideanModelDrift:
         proj = drift.project(gamma)
         # dist from proj to inner region should be exactly epsilon
         beta_star = inner.project(proj)
-        np.testing.assert_allclose(
-            np.linalg.norm(proj - beta_star), 0.3, atol=1e-10
-        )
+        np.testing.assert_allclose(np.linalg.norm(proj - beta_star), 0.3, atol=1e-10)
 
     def test_project_idempotent(self) -> None:
         drift = self._unit_ball_drift(epsilon=0.5)
@@ -892,8 +890,10 @@ def test_euclidean_drift_exterior_proj_on_boundary(seed: int, n: int) -> None:
         proj = drift.project(gamma)
         dist_to_inner = float(np.linalg.norm(proj - inner.project(proj)))
         np.testing.assert_allclose(
-            dist_to_inner, epsilon, atol=1e-10,
-            err_msg="projected point not on drift boundary"
+            dist_to_inner,
+            epsilon,
+            atol=1e-10,
+            err_msg="projected point not on drift boundary",
         )
 
 
@@ -907,9 +907,7 @@ class _NumericalEuclideanDrift(ModelDrift):
     the SLSQP-based project/contains from ModelDrift, exercising the
     numerical code path with the same Euclidean distance."""
 
-    def _min_distance_and_grad(
-        self, gamma: np.ndarray
-    ) -> tuple[float, np.ndarray]:
+    def _min_distance_and_grad(self, gamma: np.ndarray) -> tuple[float, np.ndarray]:
         beta_star = self._region.project(gamma)
         diff = gamma - beta_star
         dist = float(np.linalg.norm(diff))
