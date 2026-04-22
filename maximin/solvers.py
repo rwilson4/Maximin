@@ -428,9 +428,7 @@ class AcceleratedProximalGradientDualSolver(DualSolver):
         if self._primal_objective is not None:
             primal = self._primal_objective
 
-            def callback(
-                x_new: npt.NDArray[np.float64], obj_new: float
-            ) -> None:
+            def callback(x_new: npt.NDArray[np.float64], obj_new: float) -> None:
                 beta_k = self._objective.minimizer(x_new)
                 gaps.append(primal.evaluate(beta_k) - obj_new)
 

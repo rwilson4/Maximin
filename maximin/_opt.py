@@ -18,8 +18,7 @@ def _fista(
     tol: float,
     minimize: bool,
     backtrack_factor: float | None = None,
-    per_iter_callback: Callable[[npt.NDArray[np.float64], float], None]
-    | None = None,
+    per_iter_callback: Callable[[npt.NDArray[np.float64], float], None] | None = None,
 ) -> tuple[npt.NDArray[np.float64], float, int, bool]:
     r"""FISTA projected gradient iteration (Beck & Teboulle, 2009).
 
