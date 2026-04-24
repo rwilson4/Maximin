@@ -453,6 +453,216 @@ class AcceleratedProximalGradientDualSolver(DualSolver):
         )
 
 
+class ADMMDualSolver(DualSolver):
+    r"""ADMM solver for bilinear maximin problems.
+
+    Maximizes the dual objective
+
+    .. math::
+
+        f(c) = \min_{\beta \in S}\, c^\top A \beta
+
+    over :math:`c \in C` using the Alternating Direction Method of
+    Multipliers (ADMM) from Wilson (2025, arXiv:2604.20832).
+
+    The saddle-point problem is reformulated so that the ADMM proximal
+    operator reduces to a **generalized projection** onto :math:`S`
+    (Section 3 of the paper), enabling each iteration to alternate
+    between two manageable steps:
+
+    1. A generalized projection onto :math:`S`:
+       :math:`\beta^{k+1} = \arg\min_{\beta \in S}
+       \| A\beta + \rho v^k \|_2^2`
+
+    2. A Euclidean projection onto :math:`C`:
+       :math:`c^{k+1} = \Pi_C(y^{k+1} + u^k)`
+
+    The algorithm terminates when both the primal residual
+    :math:`\|r^k\|_2 \le \varepsilon_\mathrm{pri}` and the dual
+    residual :math:`\|s^k\|_2 \le \varepsilon_\mathrm{dual}` are
+    satisfied, using the standard ADMM stopping criteria of Boyd et al.
+    (2011), §3.3.1.
+
+    Parameters
+    ----------
+    game : MatrixGame
+        Bilinear outcome model :math:`g(c;\beta) = c^\top A \beta`.
+    region : ConfidenceRegion
+        Uncertainty set :math:`S` for :math:`\beta`; must support
+        :meth:`~maximin.confidence_regions.ConfidenceRegion.generalized_project`.
+    space : DecisionSpace
+        Feasible set :math:`C` for :math:`c`.
+    rho : float
+        ADMM penalty parameter :math:`\rho > 0`.  Affects convergence
+        speed but not the solution.  :math:`\rho = 1` works well when
+        :math:`C` and :math:`S` have comparable scales.
+    max_iter : int
+        Maximum number of ADMM iterations.
+    eps_abs : float
+        Absolute feasibility tolerance for the stopping criterion.
+    eps_rel : float
+        Relative feasibility tolerance for the stopping criterion.
+    dual_objective : DualObjective or None
+        If provided, used to evaluate the exact objective
+        :math:`f(c^*)` at convergence and (with ``primal_objective``)
+        to track duality gaps at every iteration.  When ``None``, the
+        objective is approximated as :math:`c^{*\top} A \beta^k` using
+        the last ADMM :math:`\beta` iterate; this is accurate when the
+        algorithm has converged.
+    primal_objective : PrimalObjective or None
+        If provided alongside ``dual_objective``, the duality gap
+        :math:`h(\beta^k) - f(c^k)` is computed at every iteration and
+        stored in :attr:`SolverResult.duality_gaps`.
+
+    Notes
+    -----
+    The complete ADMM loop is (Algorithm 1 of Wilson, 2025):
+
+    .. math::
+
+        v^k &= c^k - u^k \\
+        \beta^{k+1} &= \arg\min_{\beta \in S}
+            \| A\beta + \rho v^k \|_2^2 \\
+        y^{k+1} &= v^k + \tfrac{1}{\rho} A\beta^{k+1} \\
+        c^{k+1} &= \Pi_C(y^{k+1} + u^k) \\
+        u^{k+1} &= u^k + y^{k+1} - c^{k+1}
+
+    References
+    ----------
+    Wilson, R. (2025). *Solving Minimax Problems with Bilinear
+    Objectives with ADMM*. arXiv:2604.20832.
+
+    Boyd, S., Parikh, N., Chu, E., Peleato, B., & Eckstein, J. (2011).
+    *Distributed Optimization and Statistical Learning via the
+    Alternating Direction Method of Multipliers*. Foundations and
+    Trends in Machine Learning, 3(1), 1-122.
+    """
+
+    def __init__(
+        self,
+        game: MatrixGame,
+        region: ConfidenceRegion,
+        space: DecisionSpace,
+        rho: float = 1.0,
+        max_iter: int = 1_000,
+        eps_abs: float = 1e-4,
+        eps_rel: float = 1e-3,
+        dual_objective: DualObjective | None = None,
+        primal_objective: PrimalObjective | None = None,
+    ) -> None:
+        if rho <= 0:
+            raise ValueError(f"rho must be positive, got {rho}")
+        if game.dim_c != space.dim:
+            raise ValueError(
+                f"game.dim_c ({game.dim_c}) must equal space.dim ({space.dim})"
+            )
+        if game.dim_beta != region.dim:
+            raise ValueError(
+                f"game.dim_beta ({game.dim_beta}) must equal "
+                f"region.dim ({region.dim})"
+            )
+        self._game = game
+        self._region = region
+        self._space = space
+        self._rho = rho
+        self._max_iter = max_iter
+        self._eps_abs = eps_abs
+        self._eps_rel = eps_rel
+        self._dual_objective = dual_objective
+        self._primal_objective = primal_objective
+
+    def solve(
+        self,
+        c0: npt.NDArray[np.float64],
+    ) -> SolverResult:
+        r"""Run ADMM from initial decision ``c0``.
+
+        Parameters
+        ----------
+        c0 : npt.NDArray[np.float64]
+            Initial decision, shape ``(m,)``.  Projected onto :math:`C`
+            before the first iteration.
+
+        Returns
+        -------
+        SolverResult
+            Optimal decision, objective value, iteration count, and
+            convergence flag.
+        """
+        A = self._game.A  # shape (m, n)
+        rho = self._rho
+        m = self._space.dim
+
+        c = self._space.project(c0.copy())
+        u = np.zeros(m)
+        beta = np.zeros(self._region.dim)
+        gaps: list[float] = []
+
+        for k in range(self._max_iter):
+            # Step 1: intermediate variable.
+            v = c - u  # shape (m,)
+
+            # Step 2: generalized projection — solves min_{beta in S} ||A beta + rho v||^2.
+            beta = self._region.generalized_project(A, -rho * v)
+
+            # Step 3: auxiliary update.
+            y = v + (1.0 / rho) * (A @ beta)  # shape (m,)
+
+            # Step 4: Euclidean projection onto C.
+            c_new = self._space.project(y + u)
+
+            # Step 5: dual variable update.
+            u_new = u + y - c_new
+
+            # Primal and dual residuals (Boyd et al., 2011, §3.3.1).
+            r = y - c_new  # primal residual, shape (m,)
+            s = rho * (c_new - c)  # dual residual, shape (m,)
+
+            r_norm = float(np.linalg.norm(r))
+            s_norm = float(np.linalg.norm(s))
+            eps_pri = math.sqrt(m) * self._eps_abs + self._eps_rel * max(
+                float(np.linalg.norm(y)), float(np.linalg.norm(c_new))
+            )
+            eps_dual = math.sqrt(m) * self._eps_abs + self._eps_rel * rho * float(
+                np.linalg.norm(u_new)
+            )
+
+            if self._dual_objective is not None and self._primal_objective is not None:
+                obj_dual = self._dual_objective.evaluate(c_new)
+                obj_primal = self._primal_objective.evaluate(beta)
+                gaps.append(obj_primal - obj_dual)
+
+            c = c_new
+            u = u_new
+
+            if r_norm <= eps_pri and s_norm <= eps_dual:
+                return self._make_result(c, beta, k + 1, True, gaps)
+
+        return self._make_result(c, beta, self._max_iter, False, gaps)
+
+    def _make_result(
+        self,
+        c: npt.NDArray[np.float64],
+        beta: npt.NDArray[np.float64],
+        n_iterations: int,
+        converged: bool,
+        gaps: list[float],
+    ) -> SolverResult:
+        """Package the ADMM output into a SolverResult."""
+        if self._dual_objective is not None:
+            objective = self._dual_objective.evaluate(c)
+        else:
+            # At convergence beta approximates argmin_{beta in S} c^T A beta.
+            objective = float(c @ self._game.A @ beta)
+        return SolverResult(
+            x=c,
+            objective=objective,
+            n_iterations=n_iterations,
+            converged=converged,
+            duality_gaps=np.array(gaps) if gaps else None,
+        )
+
+
 def _build_markowitz_base_socp(
     game: MatrixGame,
     region: Ellipsoid,

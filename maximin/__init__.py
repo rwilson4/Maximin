@@ -30,6 +30,7 @@ from maximin.robust_constraints import (
 )
 from maximin.solvers import (
     AcceleratedProximalGradientDualSolver,
+    ADMMDualSolver,
     ConstrainedMarkowitzSolver,
     DualSolver,
     MarkowitzSolver,
@@ -41,6 +42,7 @@ from maximin.solvers import (
 )
 
 __all__ = [
+    "ADMMDualSolver",
     "AcceleratedProximalGradientDualSolver",
     "AllocationDecision",
     "BinomialRegion",

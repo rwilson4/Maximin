@@ -6,7 +6,7 @@ import time
 import numpy as np
 import pytest
 
-from maximin.confidence_regions import Ellipsoid, Hypercube
+from maximin.confidence_regions import BinomialRegion, Ellipsoid, Hypercube
 from maximin.decision_spaces import AllocationDecision
 from maximin.outcome_models import MatrixGame
 from maximin.problem_objectives import (
@@ -15,6 +15,7 @@ from maximin.problem_objectives import (
 )
 from maximin.solvers import (
     AcceleratedProximalGradientDualSolver,
+    ADMMDualSolver,
     MarkowitzSolver,
     MaximinLinearSolver,
     ProximalSubgradientDualSolver,
@@ -618,3 +619,182 @@ class TestMaximinLinearSolver:
             beta = np.where(p >= 0, lo, hi)
             f_c = float(p @ beta)
             assert f_c <= result.objective + 1e-8
+
+
+class TestADMMDualSolver:
+    r"""Tests for the ADMM-based ADMMDualSolver.
+
+    The canonical known-answer problem matches the one used across
+    all DualSolver tests:
+
+        A = I_2,  beta_hat = [1, 0],  Sigma = 0.01 I_2
+
+    giving dual objective :math:`f(c) = c_0 - 0.1\|c\|`, maximized
+    at :math:`c^* = [1, 0]` with :math:`f^* = 0.9`.
+    """
+
+    @staticmethod
+    def _simple_problem() -> tuple[
+        MatrixGame,
+        Ellipsoid,
+        AllocationDecision,
+        MatrixGameEllipsoidDualObjective,
+        ADMMDualSolver,
+    ]:
+        game = MatrixGame(np.eye(2))
+        region = Ellipsoid(np.array([1.0, 0.0]), 0.01 * np.eye(2))
+        obj = MatrixGameEllipsoidDualObjective(game, region)
+        space = AllocationDecision(2)
+        solver = ADMMDualSolver(
+            game, region, space, rho=1.0, max_iter=2_000, dual_objective=obj
+        )
+        return game, region, space, obj, solver
+
+    @staticmethod
+    def test_known_optimum() -> None:
+        """ADMM must converge to c* = [1, 0] with f* = 0.9."""
+        _, _, _, _, solver = TestADMMDualSolver._simple_problem()
+        result = solver.solve(np.array([0.5, 0.5]))
+        assert result.converged
+        np.testing.assert_allclose(result.x, [1.0, 0.0], atol=1e-3)
+        assert pytest.approx(result.objective, abs=1e-3) == 0.9
+
+    @staticmethod
+    def test_result_is_feasible() -> None:
+        """The returned point must lie in C."""
+        _, _, space, _, solver = TestADMMDualSolver._simple_problem()
+        result = solver.solve(np.array([0.5, 0.5]))
+        assert space.contains(result.x), f"result.x={result.x} not in C"
+
+    @staticmethod
+    def test_objective_equals_evaluated() -> None:
+        """result.objective must equal dual_objective.evaluate(result.x)."""
+        _, _, _, obj, solver = TestADMMDualSolver._simple_problem()
+        result = solver.solve(np.array([0.5, 0.5]))
+        assert pytest.approx(result.objective, abs=1e-12) == obj.evaluate(result.x)
+
+    @staticmethod
+    def test_initial_point_projected() -> None:
+        """An infeasible c0 must be projected onto C before iterating."""
+        _, _, space, _, solver = TestADMMDualSolver._simple_problem()
+        result = solver.solve(np.array([5.0, 5.0]))
+        assert space.contains(result.x)
+
+    @staticmethod
+    def test_duality_gaps_none_by_default() -> None:
+        """Without dual/primal objectives, duality_gaps must be None."""
+        game = MatrixGame(np.eye(2))
+        region = Ellipsoid(np.array([1.0, 0.0]), 0.01 * np.eye(2))
+        space = AllocationDecision(2)
+        solver = ADMMDualSolver(game, region, space)
+        result = solver.solve(np.array([0.5, 0.5]))
+        assert result.duality_gaps is None
+
+    @staticmethod
+    def test_duality_gaps_require_both_objectives() -> None:
+        """Providing only dual_objective (not primal) must not track gaps."""
+        game = MatrixGame(np.eye(2))
+        region = Ellipsoid(np.array([1.0, 0.0]), 0.01 * np.eye(2))
+        obj = MatrixGameEllipsoidDualObjective(game, region)
+        space = AllocationDecision(2)
+        solver = ADMMDualSolver(game, region, space, dual_objective=obj)
+        result = solver.solve(np.array([0.5, 0.5]))
+        assert result.duality_gaps is None
+
+    @staticmethod
+    def test_duality_gaps_tracked() -> None:
+        """With both objectives, gaps are non-negative and shrink."""
+        game = MatrixGame(np.eye(2))
+        region = Ellipsoid(np.array([1.0, 0.0]), 0.01 * np.eye(2))
+        obj = MatrixGameEllipsoidDualObjective(game, region)
+        space = AllocationDecision(2)
+        primal_obj = DefaultPrimalObjective(game, space)
+        solver = ADMMDualSolver(
+            game,
+            region,
+            space,
+            rho=1.0,
+            max_iter=2_000,
+            dual_objective=obj,
+            primal_objective=primal_obj,
+        )
+        result = solver.solve(np.array([0.1, 0.9]))
+        assert result.duality_gaps is not None
+        assert len(result.duality_gaps) == result.n_iterations
+        assert np.all(result.duality_gaps >= -1e-8)
+        assert result.duality_gaps[-1] < result.duality_gaps[0]
+
+    @staticmethod
+    def test_invalid_rho_raises() -> None:
+        """Non-positive rho must raise ValueError."""
+        game = MatrixGame(np.eye(2))
+        region = Ellipsoid(np.zeros(2), np.eye(2))
+        space = AllocationDecision(2)
+        with pytest.raises(ValueError, match="rho"):
+            ADMMDualSolver(game, region, space, rho=0.0)
+
+    @staticmethod
+    def test_dim_mismatch_c_raises() -> None:
+        """Mismatched game.dim_c and space.dim must raise ValueError."""
+        game = MatrixGame(np.eye(3))
+        region = Ellipsoid(np.zeros(3), np.eye(3))
+        space = AllocationDecision(2)
+        with pytest.raises(ValueError, match="dim_c"):
+            ADMMDualSolver(game, region, space)
+
+    @staticmethod
+    def test_dim_mismatch_beta_raises() -> None:
+        """Mismatched game.dim_beta and region.dim must raise ValueError."""
+        game = MatrixGame(np.ones((3, 3)))
+        region = Ellipsoid(np.zeros(2), np.eye(2))
+        space = AllocationDecision(3)
+        with pytest.raises(ValueError, match="dim_beta"):
+            ADMMDualSolver(game, region, space)
+
+    @staticmethod
+    def test_matches_markowitz_on_random_problem() -> None:
+        r"""ADMM objective must be close to the global SOCP optimum.
+
+        The SOCP finds the globally optimal decision; ADMM should match it
+        to within the ADMM convergence tolerance on a random instance.
+        """
+        np.random.seed(3141)
+        m, n = 10, 5
+        A = np.random.randn(m, n)
+        beta_hat = np.random.randn(n)
+        R = np.random.randn(n, n)
+        Sigma = R.T @ R + np.eye(n)
+        game = MatrixGame(A)
+        region = Ellipsoid(beta_hat, Sigma)
+        space = AllocationDecision(m)
+        obj = MatrixGameEllipsoidDualObjective(game, region)
+
+        c0 = np.ones(m) / m
+        socp_result = MarkowitzSolver(game, region, space).solve(c0)
+        admm_result = ADMMDualSolver(
+            game, region, space, rho=1.0, max_iter=5_000, dual_objective=obj
+        ).solve(c0)
+
+        assert space.contains(admm_result.x), "ADMM result not in C"
+        assert socp_result.objective >= admm_result.objective - 1e-3
+
+    @staticmethod
+    def test_works_with_non_ellipsoid_region() -> None:
+        r"""ADMM must run and produce a feasible result with a BinomialRegion.
+
+        This exercises the SLSQP-based generalized projection path on
+        a non-Ellipsoid confidence region.  The BinomialRegion has
+        :math:`\beta_i \in (0, 1)` and :math:`A = I_2` so the minimax
+        value equals :math:`\min(\hat\beta_0, \hat\beta_1)` when the
+        constraint is tight.
+        """
+        from scipy.stats import chi2
+
+        n_obs = np.array([100.0, 100.0])
+        k_obs = np.array([60.0, 40.0])
+        region = BinomialRegion(n_obs, k_obs, chi2.ppf(0.95, df=2))
+        game = MatrixGame(np.eye(2))
+        space = AllocationDecision(2)
+        solver = ADMMDualSolver(game, region, space, rho=1.0, max_iter=500)
+        result = solver.solve(np.array([0.5, 0.5]))
+        assert space.contains(result.x), f"result.x={result.x} not in C"
