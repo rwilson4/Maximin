@@ -48,6 +48,37 @@ class ConfidenceRegion(ABC):
     ) -> bool:
         r"""Return True if ``beta`` lies in :math:`S`."""
 
+    @abstractmethod
+    def generalized_project(
+        self,
+        A: npt.NDArray[np.float64],
+        v: npt.NDArray[np.float64],
+    ) -> npt.NDArray[np.float64]:
+        r"""Generalized projection onto :math:`S`.
+
+        Solves
+
+        .. math::
+
+            \min_{\beta \in S} \|A\beta - v\|_2^2
+
+        where ``A`` has shape ``(n, self.dim)`` and ``v`` has shape ``(n,)``.
+        When ``A = np.eye(self.dim)``, this reduces exactly to
+        :meth:`project` called with ``v``.
+
+        Parameters
+        ----------
+        A : npt.NDArray[np.float64]
+            Linear operator, shape ``(n, self.dim)``.
+        v : npt.NDArray[np.float64]
+            Target vector, shape ``(n,)``.
+
+        Returns
+        -------
+        npt.NDArray[np.float64]
+            Optimal point in :math:`S`, shape ``(self.dim,)``.
+        """
+
 
 class Hypercube(ConfidenceRegion):
     r"""Hypercube (box) confidence region.
@@ -123,6 +154,54 @@ class Hypercube(ConfidenceRegion):
         """
         return np.clip(beta, self._lo, self._hi)
 
+    def generalized_project(
+        self,
+        A: npt.NDArray[np.float64],
+        v: npt.NDArray[np.float64],
+    ) -> npt.NDArray[np.float64]:
+        r"""Generalized projection onto the hypercube via L-BFGS-B.
+
+        Parameters
+        ----------
+        A : npt.NDArray[np.float64]
+            Linear operator, shape ``(n, self.dim)``.
+        v : npt.NDArray[np.float64]
+            Target vector, shape ``(n,)``.
+
+        Returns
+        -------
+        npt.NDArray[np.float64]
+            Minimizer of :math:`\|A\beta - v\|^2` over :math:`S`,
+            shape ``(self.dim,)``.
+
+        Notes
+        -----
+        The objective :math:`\|A\beta - v\|^2` is convex quadratic; the
+        box constraints are simple bounds.  L-BFGS-B maintains feasibility
+        at every iterate, so no post-solve feasibility recovery is needed.
+        The warm start is the unconstrained least-squares solution clipped
+        to the box.
+        """
+        beta_ls = np.linalg.lstsq(A, v, rcond=None)[0]
+        x0 = np.clip(beta_ls, self._lo, self._hi)
+
+        def obj(x: npt.NDArray[np.float64]) -> float:
+            r = A @ x - v
+            return float(np.dot(r, r))
+
+        def jac(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+            return 2.0 * (A.T @ (A @ x - v))
+
+        result = scipy.optimize.minimize(
+            fun=obj,
+            jac=jac,
+            x0=x0,
+            method="L-BFGS-B",
+            bounds=scipy.optimize.Bounds(self._lo, self._hi),
+            options={"ftol": 1e-15, "gtol": 1e-10, "maxiter": 2000},
+        )
+        return np.asarray(result.x, dtype=np.float64)
+
 
 class Ellipsoid(ConfidenceRegion):
     r"""Ellipsoidal confidence region.
@@ -183,6 +262,7 @@ class Ellipsoid(ConfidenceRegion):
         self._n = n
         self._d = d  # eigenvalues, shape (n,), ascending
         self._Q = Q  # eigenvectors, shape (n, n)
+        self._sqrt_d = np.sqrt(d)  # shape (n,); reused by generalized_project
 
     @property
     def dim(self) -> int:
@@ -261,6 +341,86 @@ class Ellipsoid(ConfidenceRegion):
 
         w = d * v / (d + nu_star)  # shape (n,)
         return self._beta_hat + Q @ w
+
+    def generalized_project(
+        self,
+        A: npt.NDArray[np.float64],
+        v: npt.NDArray[np.float64],
+    ) -> npt.NDArray[np.float64]:
+        r"""Generalized projection onto the ellipsoid via a trust-region secular
+        equation.
+
+        Parameters
+        ----------
+        A : npt.NDArray[np.float64]
+            Linear operator, shape ``(n, self.dim)``.
+        v : npt.NDArray[np.float64]
+            Target vector, shape ``(n,)``.
+
+        Returns
+        -------
+        npt.NDArray[np.float64]
+            Minimizer of :math:`\|A\beta - v\|^2` over :math:`S`,
+            shape ``(self.dim,)``.
+
+        Notes
+        -----
+        Let :math:`y = Q^\top(\beta - \hat\beta)` (eigenbasis coordinates).
+        The constraint becomes :math:`\sum_i y_i^2 / d_i \le 1`.
+        Substituting :math:`z_i = y_i / \sqrt{d_i}` maps the constraint to
+        :math:`\|z\| \le 1` and the objective to :math:`\|Cz - w\|^2` where
+
+        .. math::
+
+            C = (A Q) \odot \sqrt{d}^\top, \quad w = v - A\hat\beta.
+
+        This is a standard trust-region subproblem.  With thin SVD
+        :math:`C = U S V^\top` and :math:`\phi = U^\top w`, the KKT
+        conditions give :math:`z^*(\nu) = V \operatorname{diag}(s_i/(s_i^2 +
+        \nu)) \phi` where :math:`\nu \ge 0` solves
+
+        .. math::
+
+            \psi(\nu) = \sum_i \frac{s_i^2 \phi_i^2}{(s_i^2 + \nu)^2} = 1.
+
+        Recovery: :math:`\beta^* = \hat\beta + Q ((\sqrt{d}) \odot z^*)`.
+
+        When :math:`A = I`, the secular equation reduces to the standard
+        ellipsoid-projection secular equation and the result matches
+        :meth:`project` exactly.
+        """
+        Q, sqrt_d = self._Q, self._sqrt_d
+        beta_hat = self._beta_hat
+        w = v - A @ beta_hat  # shape (n,)
+        C = (A @ Q) * sqrt_d  # shape (n, dim); column j scaled by sqrt(d_j)
+
+        U_C, s, Vt_C = np.linalg.svd(C, full_matrices=False)
+        phi = U_C.T @ w  # shape (r,), r = min(n, dim)
+
+        # Unconstrained least-squares solution in z-space.
+        s_max = s[0] if len(s) > 0 else 0.0
+        nonzero = s > 1e-12 * s_max
+        xi_unc = np.where(nonzero, phi / np.where(nonzero, s, 1.0), 0.0)
+        z_unc = Vt_C.T @ xi_unc  # shape (dim,)
+
+        if float(np.dot(z_unc, z_unc)) <= 1.0:
+            y = sqrt_d * z_unc
+            return np.asarray(beta_hat + Q @ y, dtype=np.float64)
+
+        # Solve secular equation psi(nu) = sum_i (s_i phi_i)^2 / (s_i^2 + nu)^2 = 1.
+        s_phi = s * phi  # shape (r,)
+
+        def psi(nu: float) -> float:
+            return float(np.sum((s_phi / (s**2 + nu)) ** 2)) - 1.0
+
+        # Upper bound: psi(nu) <= ||s_phi||^2 / nu^2 < 1 when nu > ||s_phi||.
+        nu_upper = 2.0 * math.sqrt(float(np.dot(s_phi, s_phi))) + 1.0
+        nu_star: float = scipy.optimize.brentq(psi, 0.0, nu_upper)
+
+        xi = s_phi / (s**2 + nu_star)
+        z = Vt_C.T @ xi
+        y = sqrt_d * z
+        return np.asarray(beta_hat + Q @ y, dtype=np.float64)
 
 
 class LogConcaveLikelihoodRegion(ConfidenceRegion, ABC):
@@ -420,6 +580,94 @@ class LogConcaveLikelihoodRegion(ConfidenceRegion, ABC):
         # SLSQP's constraint satisfaction is ~1e-8; if the result is just
         # outside S, binary-search toward beta_hat (always feasible) to
         # recover a point that satisfies contains() with its default atol.
+        if not self.contains(result_x):
+            t_lo, t_hi = 0.0, 1.0
+            for _ in range(50):
+                t_mid = (t_lo + t_hi) / 2.0
+                x_mid = (1.0 - t_mid) * result_x + t_mid * beta_hat
+                if self.contains(x_mid):
+                    t_hi = t_mid
+                else:
+                    t_lo = t_mid
+            result_x = (1.0 - t_hi) * result_x + t_hi * beta_hat
+
+        return result_x
+
+    def generalized_project(
+        self,
+        A: npt.NDArray[np.float64],
+        v: npt.NDArray[np.float64],
+    ) -> npt.NDArray[np.float64]:
+        r"""Generalized projection onto :math:`S` via SLSQP.
+
+        Parameters
+        ----------
+        A : npt.NDArray[np.float64]
+            Linear operator, shape ``(n, self.dim)``.
+        v : npt.NDArray[np.float64]
+            Target vector, shape ``(n,)``.
+
+        Returns
+        -------
+        npt.NDArray[np.float64]
+            Minimizer of :math:`\|A\beta - v\|^2` over :math:`S`,
+            shape ``(self.dim,)``.
+        """
+        bounds = self._opt_bounds
+        beta_hat = self.beta_hat
+        lo: npt.NDArray[np.float64]
+        hi: npt.NDArray[np.float64]
+        if bounds is not None:
+            lo = np.array([b[0] if b[0] is not None else -np.inf for b in bounds])
+            hi = np.array([b[1] if b[1] is not None else np.inf for b in bounds])
+            beta_hat = np.clip(beta_hat, lo, hi)
+
+        # Unconstrained least-squares warm start, clipped to parameter domain.
+        x_target: npt.NDArray[np.float64] = np.asarray(
+            np.linalg.lstsq(A, v, rcond=None)[0], dtype=np.float64
+        )
+        if bounds is not None:
+            x_target = np.clip(x_target, lo, hi)
+
+        if self.contains(x_target):
+            return x_target
+
+        # Binary-search for a starting point strictly inside S.
+        t_lo, t_hi = 0.0, 1.0
+        for _ in range(30):
+            t_mid = (t_lo + t_hi) / 2.0
+            x_mid = beta_hat + t_mid * (x_target - beta_hat)
+            if bounds is not None:
+                x_mid = np.clip(x_mid, lo, hi)
+            if self.contains(x_mid):
+                t_lo = t_mid
+            else:
+                t_hi = t_mid
+        x0 = beta_hat + t_lo * (x_target - beta_hat)
+        if bounds is not None:
+            x0 = np.clip(x0, lo, hi)
+
+        threshold = self._threshold
+
+        def _constraint_val(x: npt.NDArray[np.float64]) -> float:
+            return float(threshold - self._lrt(x))
+
+        def _constraint_jac(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+            return 2.0 * self.grad_log_likelihood(x)
+
+        result = scipy.optimize.minimize(
+            fun=lambda x: float(np.dot(A @ x - v, A @ x - v)),
+            jac=lambda x: 2.0 * (A.T @ (A @ x - v)),
+            x0=x0,
+            method="SLSQP",
+            bounds=bounds,
+            constraints=[
+                {"type": "ineq", "fun": _constraint_val, "jac": _constraint_jac}
+            ],
+            options={"ftol": 1e-12, "maxiter": 1000},
+        )
+        result_x: npt.NDArray[np.float64] = result.x
+
         if not self.contains(result_x):
             t_lo, t_hi = 0.0, 1.0
             for _ in range(50):
@@ -844,6 +1092,92 @@ class CriterionRegion(ConfidenceRegion, ABC):
 
         return result_x
 
+    def generalized_project(
+        self,
+        A: npt.NDArray[np.float64],
+        v: npt.NDArray[np.float64],
+    ) -> npt.NDArray[np.float64]:
+        r"""Generalized projection onto :math:`S` via SLSQP.
+
+        Parameters
+        ----------
+        A : npt.NDArray[np.float64]
+            Linear operator, shape ``(n, self.dim)``.
+        v : npt.NDArray[np.float64]
+            Target vector, shape ``(n,)``.
+
+        Returns
+        -------
+        npt.NDArray[np.float64]
+            Minimizer of :math:`\|A\beta - v\|^2` over :math:`S`,
+            shape ``(self.dim,)``.
+        """
+        bounds = self._opt_bounds
+        beta_hat = self.beta_hat
+        lo: npt.NDArray[np.float64]
+        hi: npt.NDArray[np.float64]
+        if bounds is not None:
+            lo = np.array([b[0] if b[0] is not None else -np.inf for b in bounds])
+            hi = np.array([b[1] if b[1] is not None else np.inf for b in bounds])
+            beta_hat = np.clip(beta_hat, lo, hi)
+
+        x_target: npt.NDArray[np.float64] = np.asarray(
+            np.linalg.lstsq(A, v, rcond=None)[0], dtype=np.float64
+        )
+        if bounds is not None:
+            x_target = np.clip(x_target, lo, hi)
+
+        if self.contains(x_target):
+            return x_target
+
+        t_lo, t_hi = 0.0, 1.0
+        for _ in range(30):
+            t_mid = (t_lo + t_hi) / 2.0
+            x_mid = beta_hat + t_mid * (x_target - beta_hat)
+            if bounds is not None:
+                x_mid = np.clip(x_mid, lo, hi)
+            if self.contains(x_mid):
+                t_lo = t_mid
+            else:
+                t_hi = t_mid
+        x0 = beta_hat + t_lo * (x_target - beta_hat)
+        if bounds is not None:
+            x0 = np.clip(x0, lo, hi)
+
+        threshold = self._threshold
+
+        def _constraint_val(x: npt.NDArray[np.float64]) -> float:
+            return float(threshold - self._excess(x))
+
+        def _constraint_jac(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+            return -self.grad_loss(x)
+
+        result = scipy.optimize.minimize(
+            fun=lambda x: float(np.dot(A @ x - v, A @ x - v)),
+            jac=lambda x: 2.0 * (A.T @ (A @ x - v)),
+            x0=x0,
+            method="SLSQP",
+            bounds=bounds,
+            constraints=[
+                {"type": "ineq", "fun": _constraint_val, "jac": _constraint_jac}
+            ],
+            options={"ftol": 1e-12, "maxiter": 1000},
+        )
+        result_x: npt.NDArray[np.float64] = result.x
+
+        if not self.contains(result_x):
+            t_lo, t_hi = 0.0, 1.0
+            for _ in range(50):
+                t_mid = (t_lo + t_hi) / 2.0
+                x_mid = (1.0 - t_mid) * result_x + t_mid * beta_hat
+                if self.contains(x_mid):
+                    t_hi = t_mid
+                else:
+                    t_lo = t_mid
+            result_x = (1.0 - t_hi) * result_x + t_hi * beta_hat
+
+        return result_x
+
 
 class HuberCriterionRegion(CriterionRegion):
     r"""Confidence region defined by the sublevel set of the Huber loss.
@@ -1066,6 +1400,72 @@ class ModelDrift(ConfidenceRegion, ABC):
 
         # Post-SLSQP feasibility recovery: bisect toward x0 (always feasible),
         # mirroring the pattern in LogConcaveLikelihoodRegion.project.
+        if not self.contains(result_x):
+            t_lo, t_hi = 0.0, 1.0
+            for _ in range(50):
+                t_mid = (t_lo + t_hi) / 2.0
+                x_mid = (1.0 - t_mid) * result_x + t_mid * x0
+                if self.contains(x_mid):
+                    t_hi = t_mid
+                else:
+                    t_lo = t_mid
+            result_x = (1.0 - t_hi) * result_x + t_hi * x0
+
+        return result_x
+
+    def generalized_project(
+        self,
+        A: npt.NDArray[np.float64],
+        v: npt.NDArray[np.float64],
+    ) -> npt.NDArray[np.float64]:
+        r"""Generalized projection onto :math:`T` via SLSQP.
+
+        Parameters
+        ----------
+        A : npt.NDArray[np.float64]
+            Linear operator, shape ``(n, self.dim)``.
+        v : npt.NDArray[np.float64]
+            Target vector, shape ``(n,)``.
+
+        Returns
+        -------
+        npt.NDArray[np.float64]
+            Minimizer of :math:`\|A\gamma - v\|^2` over :math:`T`,
+            shape ``(self.dim,)``.
+
+        Notes
+        -----
+        The warm start is ``region.project(lstsq_solution)``, which lies
+        in :math:`S` and hence has zero distance to :math:`S`, so it is
+        always feasible for :math:`T`.
+        """
+        x_target: npt.NDArray[np.float64] = np.asarray(
+            np.linalg.lstsq(A, v, rcond=None)[0], dtype=np.float64
+        )
+        if self.contains(x_target):
+            return x_target
+
+        x0 = self._region.project(x_target)
+        epsilon = self._epsilon
+
+        def _constraint_val(x: npt.NDArray[np.float64]) -> float:
+            return float(epsilon - self._min_distance_and_grad(x)[0])
+
+        def _constraint_jac(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+            return -self._min_distance_and_grad(x)[1]
+
+        result = scipy.optimize.minimize(
+            fun=lambda x: float(np.dot(A @ x - v, A @ x - v)),
+            jac=lambda x: 2.0 * (A.T @ (A @ x - v)),
+            x0=x0,
+            method="SLSQP",
+            constraints=[
+                {"type": "ineq", "fun": _constraint_val, "jac": _constraint_jac}
+            ],
+            options={"ftol": 1e-12, "maxiter": 1000},
+        )
+        result_x: npt.NDArray[np.float64] = result.x
+
         if not self.contains(result_x):
             t_lo, t_hi = 0.0, 1.0
             for _ in range(50):

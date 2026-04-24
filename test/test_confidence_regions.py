@@ -944,3 +944,332 @@ class TestModelDriftNumerical:
         drift = self._drift(epsilon=0.5)
         gamma = np.array([1.2, 0.0])  # dist to unit ball = 0.2 < 0.5
         np.testing.assert_allclose(drift.project(gamma), gamma)
+
+
+# ---------------------------------------------------------------------------
+# generalized_project tests
+# ---------------------------------------------------------------------------
+
+
+class TestEllipsoidGeneralizedProject:
+    """Tests for Ellipsoid.generalized_project."""
+
+    @staticmethod
+    def _unit_ball() -> Ellipsoid:
+        return Ellipsoid(np.zeros(2), np.eye(2))
+
+    @staticmethod
+    def _general() -> Ellipsoid:
+        beta_hat = np.array([1.0, -0.5])
+        Sigma = np.array([[3.0, 0.5], [0.5, 2.0]])
+        return Ellipsoid(beta_hat, Sigma)
+
+    def test_identity_reduces_to_project_unit_ball(self) -> None:
+        """generalized_project(I, v) == project(v) for the unit ball."""
+        region = self._unit_ball()
+        for v in [np.array([3.0, 4.0]), np.array([-2.0, 0.0]), np.array([0.5, 1.5])]:
+            np.testing.assert_allclose(
+                region.generalized_project(np.eye(2), v),
+                region.project(v),
+                atol=1e-10,
+            )
+
+    def test_identity_reduces_to_project_general(self) -> None:
+        """generalized_project(I, v) == project(v) for a non-trivial ellipsoid."""
+        region = self._general()
+        rng = np.random.default_rng(2001)
+        for _ in range(10):
+            v = rng.standard_normal(2) * 5.0
+            np.testing.assert_allclose(
+                region.generalized_project(np.eye(2), v),
+                region.project(v),
+                atol=1e-10,
+            )
+
+    def test_known_value_rank_one_A(self) -> None:
+        """A = [[1, 0]], v = [3]: minimise (beta_0 - 3)^2 s.t. ||beta|| <= 1."""
+        region = self._unit_ball()
+        A = np.array([[1.0, 0.0]])
+        v = np.array([3.0])
+        result = region.generalized_project(A, v)
+        # Optimal: beta_0 = 1, beta_1 = 0 (constraint active on first component).
+        np.testing.assert_allclose(result, np.array([1.0, 0.0]), atol=1e-10)
+
+    def test_unconstrained_solution_inside_returned(self) -> None:
+        """When lstsq solution is inside S it should be returned directly."""
+        region = self._unit_ball()
+        # A = I, v = beta_hat (origin): unconstrained solution is 0, inside S.
+        A = np.eye(2)
+        v = np.array([0.1, 0.1])
+        result = region.generalized_project(A, v)
+        np.testing.assert_allclose(result, v, atol=1e-12)
+
+    def test_result_always_feasible(self) -> None:
+        """Projected point must lie in S for arbitrary A and v."""
+        region = self._general()
+        rng = np.random.default_rng(2002)
+        for _ in range(20):
+            n = rng.integers(1, 6)
+            A = rng.standard_normal((n, 2))
+            v = rng.standard_normal(n)
+            result = region.generalized_project(A, v)
+            assert region.contains(result), f"result {result} not in S"
+
+    def test_objective_not_worse_than_beta_hat(self) -> None:
+        """Result objective <= objective at beta_hat (always feasible baseline)."""
+        region = self._general()
+        rng = np.random.default_rng(2003)
+        for _ in range(10):
+            A = rng.standard_normal((3, 2))
+            v = rng.standard_normal(3)
+            result = region.generalized_project(A, v)
+            beta_hat = region.beta_hat
+            obj_result = float(np.dot(A @ result - v, A @ result - v))
+            obj_hat = float(np.dot(A @ beta_hat - v, A @ beta_hat - v))
+            assert obj_result <= obj_hat + 1e-6
+
+
+@pytest.mark.parametrize(
+    "seed,n",
+    [(2101, 2), (2102, 3), (2103, 5), (2104, 10)],
+)
+def test_ellipsoid_gp_identity_parametrized(seed: int, n: int) -> None:
+    """generalized_project(I, v) == project(v) for random ellipsoids."""
+    rng = np.random.default_rng(seed)
+    for _ in range(5):
+        beta_hat = rng.standard_normal(n)
+        M = rng.standard_normal((n, n))
+        Sigma = M @ M.T + np.eye(n)
+        region = Ellipsoid(beta_hat, Sigma)
+        v = rng.standard_normal(n) * 5.0
+        np.testing.assert_allclose(
+            region.generalized_project(np.eye(n), v),
+            region.project(v),
+            atol=1e-8,
+        )
+
+
+class TestHypercubeGeneralizedProject:
+    """Tests for Hypercube.generalized_project."""
+
+    @staticmethod
+    def _box() -> Hypercube:
+        return Hypercube(np.array([-1.0, -1.0]), np.array([1.0, 1.0]))
+
+    def test_identity_reduces_to_project(self) -> None:
+        """generalized_project(I, v) == project(v)."""
+        region = self._box()
+        for v in [np.array([3.0, -2.0]), np.array([0.5, 0.5]), np.array([-5.0, 0.0])]:
+            np.testing.assert_allclose(
+                region.generalized_project(np.eye(2), v),
+                region.project(v),
+                atol=1e-8,
+            )
+
+    def test_diagonal_A_known_value(self) -> None:
+        """Diagonal A decouples: beta_i* = clip(v_i / a_i, lo_i, hi_i)."""
+        lo = np.array([-2.0, 0.0])
+        hi = np.array([3.0, 5.0])
+        region = Hypercube(lo, hi)
+        a = np.array([2.0, 0.5])
+        A = np.diag(a)
+        v = np.array([10.0, -1.0])
+        result = region.generalized_project(A, v)
+        expected = np.clip(v / a, lo, hi)
+        np.testing.assert_allclose(result, expected, atol=1e-8)
+
+    def test_unconstrained_in_box_returned(self) -> None:
+        """When lstsq solution is inside the box it should be returned."""
+        region = self._box()
+        A = np.eye(2)
+        v = np.array([0.3, -0.4])
+        result = region.generalized_project(A, v)
+        np.testing.assert_allclose(result, v, atol=1e-8)
+
+    def test_result_always_feasible(self) -> None:
+        """Projected point is always in the box."""
+        lo = np.array([-2.0, -1.0, 0.0])
+        hi = np.array([1.0, 3.0, 4.0])
+        region = Hypercube(lo, hi)
+        rng = np.random.default_rng(2201)
+        for _ in range(20):
+            n = rng.integers(1, 6)
+            A = rng.standard_normal((n, 3))
+            v = rng.standard_normal(n)
+            result = region.generalized_project(A, v)
+            assert region.contains(result), f"result {result} not in box"
+
+
+class TestBinomialGeneralizedProject:
+    """Tests for BinomialRegion.generalized_project (inherits from
+    LogConcaveLikelihoodRegion)."""
+
+    @staticmethod
+    def _make(m: int = 2) -> BinomialRegion:
+        n = np.full(m, 100.0)
+        k = np.full(m, 50.0)
+        return BinomialRegion(n, k, chi2.ppf(0.95, df=m))
+
+    def test_identity_reduces_to_project(self) -> None:
+        """generalized_project(I, v) == project(v) for an outside point."""
+        region = self._make(2)
+        v = np.array([0.2, 0.2])  # outside the region
+        np.testing.assert_allclose(
+            region.generalized_project(np.eye(2), v),
+            region.project(v),
+            atol=1e-5,
+        )
+
+    def test_result_always_feasible(self) -> None:
+        """Projected point must lie in S."""
+        region = self._make(3)
+        rng = np.random.default_rng(2301)
+        for _ in range(10):
+            n_rows = rng.integers(1, 5)
+            A = rng.standard_normal((n_rows, 3)) * 0.1
+            v = rng.standard_normal(n_rows)
+            result = region.generalized_project(A, v)
+            assert region.contains(result), f"result {result} not in S"
+
+    def test_unconstrained_in_S_returned(self) -> None:
+        """When lstsq solution is inside S it is returned directly."""
+        region = self._make(2)
+        beta_hat = region.beta_hat  # always in S
+        A = np.eye(2)
+        result = region.generalized_project(A, beta_hat)
+        np.testing.assert_allclose(result, beta_hat, atol=1e-10)
+
+
+class TestPoissonGeneralizedProject:
+    """Tests for PoissonRegion.generalized_project."""
+
+    @staticmethod
+    def _make(m: int = 2) -> PoissonRegion:
+        n = np.full(m, 10.0)
+        x_sum = np.full(m, 100.0)
+        return PoissonRegion(n, x_sum, chi2.ppf(0.95, df=m))
+
+    def test_identity_reduces_to_project(self) -> None:
+        region = self._make(2)
+        v = np.array([5.0, 5.0])  # outside (MLE ~ 10)
+        np.testing.assert_allclose(
+            region.generalized_project(np.eye(2), v),
+            region.project(v),
+            atol=1e-5,
+        )
+
+    def test_result_always_feasible(self) -> None:
+        region = self._make(2)
+        rng = np.random.default_rng(2401)
+        for _ in range(10):
+            A = rng.standard_normal((2, 2)) * 0.5 + np.eye(2)
+            v = rng.standard_normal(2) * 2.0 + np.array([10.0, 10.0])
+            result = region.generalized_project(A, v)
+            assert region.contains(result), f"result {result} not in S"
+
+
+class TestGammaGeneralizedProject:
+    """Tests for GammaRegion.generalized_project."""
+
+    @staticmethod
+    def _make(m: int = 2) -> GammaRegion:
+        alpha = np.full(m, 2.0)
+        n = np.full(m, 10.0)
+        x_sum = np.full(m, 5.0)
+        return GammaRegion(alpha, n, x_sum, chi2.ppf(0.95, df=m))
+
+    def test_identity_reduces_to_project(self) -> None:
+        region = self._make(2)
+        v = region.beta_hat * 0.5  # perturbed from MLE, should be outside
+        np.testing.assert_allclose(
+            region.generalized_project(np.eye(2), v),
+            region.project(v),
+            atol=1e-5,
+        )
+
+    def test_result_always_feasible(self) -> None:
+        region = self._make(2)
+        rng = np.random.default_rng(2501)
+        for _ in range(10):
+            A = rng.standard_normal((2, 2)) * 0.3 + np.eye(2)
+            v = rng.standard_normal(2) + region.beta_hat
+            result = region.generalized_project(A, v)
+            assert region.contains(result), f"result {result} not in S"
+
+
+class TestHuberGeneralizedProject:
+    """Tests for HuberCriterionRegion.generalized_project (inherits from
+    CriterionRegion)."""
+
+    @staticmethod
+    def _make(p: int = 2, n: int = 20, seed: int = 500) -> HuberCriterionRegion:
+        rng = np.random.default_rng(seed)
+        X = rng.standard_normal((n, p))
+        y = rng.standard_normal(n)
+        return HuberCriterionRegion(X, y, delta=1.5, threshold=1.0)
+
+    def test_identity_reduces_to_project(self) -> None:
+        region = self._make(p=2)
+        v = region.beta_hat + np.array([5.0, 5.0])  # well outside
+        np.testing.assert_allclose(
+            region.generalized_project(np.eye(2), v),
+            region.project(v),
+            atol=1e-5,
+        )
+
+    def test_result_always_feasible(self) -> None:
+        region = self._make(p=3, seed=501)
+        rng = np.random.default_rng(2601)
+        for _ in range(5):
+            n_rows = rng.integers(1, 5)
+            A = rng.standard_normal((n_rows, 3))
+            v = rng.standard_normal(n_rows)
+            result = region.generalized_project(A, v)
+            assert region.contains(result, atol=1e-6), f"result {result} not in S"
+
+    def test_unconstrained_in_S_returned(self) -> None:
+        region = self._make(p=2)
+        beta_hat = region.beta_hat
+        A = np.eye(2)
+        result = region.generalized_project(A, beta_hat)
+        np.testing.assert_allclose(result, beta_hat, atol=1e-8)
+
+
+class TestEuclideanDriftGeneralizedProject:
+    """Tests for EuclideanModelDrift.generalized_project (inherits from
+    ModelDrift)."""
+
+    @staticmethod
+    def _drift(epsilon: float = 0.5) -> EuclideanModelDrift:
+        inner = Ellipsoid(np.zeros(2), np.eye(2))
+        return EuclideanModelDrift(inner, epsilon)
+
+    def test_identity_reduces_to_project(self) -> None:
+        """generalized_project(I, v) == project(v) for points outside T."""
+        drift = self._drift()
+        v = np.array([3.0, 0.0])  # far outside T (dist to unit ball = 2 > 0.5)
+        np.testing.assert_allclose(
+            drift.generalized_project(np.eye(2), v),
+            drift.project(v),
+            atol=1e-5,
+        )
+
+    def test_result_always_feasible(self) -> None:
+        """Projected point is always in T."""
+        drift = self._drift(epsilon=0.4)
+        rng = np.random.default_rng(2701)
+        for _ in range(10):
+            n_rows = rng.integers(1, 4)
+            A = rng.standard_normal((n_rows, 2))
+            v = rng.standard_normal(n_rows)
+            result = drift.generalized_project(A, v)
+            assert drift.contains(result, atol=1e-6), f"result {result} not in T"
+
+    def test_inside_T_returned_unchanged(self) -> None:
+        """When lstsq solution is inside T it is returned directly."""
+        drift = self._drift(epsilon=2.0)
+        # With epsilon=2, most points are inside T.
+        A = np.eye(2)
+        v = np.array([0.1, 0.1])  # inside the unit ball, so in T
+        result = drift.generalized_project(A, v)
+        np.testing.assert_allclose(result, v, atol=1e-8)
